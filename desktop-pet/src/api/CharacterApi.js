@@ -121,8 +121,8 @@ export function createCharacterApi({
   }
 
   /** 播放 VRMA 动作，并通知界面和订阅者更新当前动作。 */
-  async function playMotion(name) {
-    const result = await motionController.playMotion(name);
+  async function playMotion(name, options = {}) {
+    const result = await motionController.playMotion(name, options);
     if (result.status === "playing") notifyMotionListeners(result.motion);
     return result;
   }
@@ -155,10 +155,10 @@ export function createCharacterApi({
       }
     }
 
-    // 2. 触发伴随的 VRMA 骨骼动作
+    // 2. 触发伴随的 VRMA 骨骼动作（对话触发的动作固定只播放一次，播完自动恢复默认待机）
     if (typeof action.motion === "string" && action.motion.trim()) {
       try {
-        const motionResult = await playMotion(action.motion.trim());
+        const motionResult = await playMotion(action.motion.trim(), { once: true });
         summary.motion = motionResult.motion;
       } catch (error) {
         console.warn("执行智能体动作失败：", error);

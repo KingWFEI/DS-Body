@@ -1,12 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createCharacterApi } from "../src/api/CharacterApi.js";
+import { isOneShotMotion } from "../src/animation/motionCatalog.js";
 
 test("unified character API forwards commands and waits for movement completion", async () => {
   let movementListener;
   let agentActionListener;
   let presetCall;
   let activeMotion = "idle/idle.vrma";
+  let lastPlayMotionCall = null;
   const expressionCalls = [];
   let movementState = {
     position: { x: 20, y: 30 },
@@ -48,8 +50,9 @@ test("unified character API forwards commands and waits for movement completion"
     },
   };
   const motionController = {
-    playMotion: async (name) => {
+    playMotion: async (name, options) => {
       activeMotion = name;
+      lastPlayMotionCall = { name, options };
       return { accepted: true, status: "playing", motion: name };
     },
     getActiveMotion: () => activeMotion,
@@ -127,6 +130,8 @@ test("unified character API forwards commands and waits for movement completion"
   assert.equal(summary.motion, "dance/dance1");
   assert.equal(summary.expression, "happy");
   assert.equal(summary.movePreset, "right");
+  assert.deepEqual(lastPlayMotionCall, { name: "dance/dance1", options: { once: true } });
+  assert.equal(isOneShotMotion("attention/wave hand 1.vrma"), true);
   assert.ok(expressionCalls.some((item) => item.name === "sad" && item.value === 0));
   assert.ok(expressionCalls.some((item) => item.name === "happy" && item.value === 0.85));
   assert.equal(typeof agentActionListener, "function");

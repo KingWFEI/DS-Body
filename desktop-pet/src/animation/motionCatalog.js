@@ -52,9 +52,10 @@ export function normalizeMotionPath(name) {
   return path;
 }
 
-/** 判断需要播放一次后返回待机的 VRMA 动作。 */
+/** 判断默认只需播放一次后自动返回待机的 VRMA 动作。 */
 export function isOneShotMotion(name) {
   return /^idle\/(hungry|idle lookaround|idle stretch|touch hair)/.test(name) ||
+    /^attention\//.test(name) ||
     /^success\/jump/.test(name) ||
     /^fail\//.test(name) ||
     /^dance\//.test(name);

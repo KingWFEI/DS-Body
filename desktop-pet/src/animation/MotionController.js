@@ -32,18 +32,16 @@ export class MotionController {
 
     const clip = createVRMAnimationClip(vrma, this.vrm);
     const action = this.mixer.clipAction(clip);
-    if (isOneShotMotion(path)) {
-      action.setLoop(THREE.LoopOnce, 1);
-      action.clampWhenFinished = true;
-    } else {
-      action.setLoop(THREE.LoopRepeat, Infinity);
-    }
     this.actionCache.set(path, action);
     return action;
   }
 
-  /** 播放动作名或动作路径；较新的播放命令会覆盖尚未加载完的旧命令。 */
-  async playMotion(name) {
+  /**
+   * 播放动作名或动作路径；较新的播放命令会覆盖尚未加载完的旧命令。
+   * @param {string} name 动作名称或路径。
+   * @param {{once?:boolean}} [options] 播放选项；once=true 时单次播放完毕自动触发 finished 回到默认待机。
+   */
+  async playMotion(name, options = {}) {
     if (!this.vrm || !this.mixer) throw new Error("人物模型尚未加载完成");
     const path = normalizeMotionPath(name);
     const requestId = ++this.requestId;
@@ -53,6 +51,16 @@ export class MotionController {
       const nextAction = await this.#loadAction(path);
       if (requestId !== this.requestId) {
         return { accepted: false, status: "superseded", motion: path };
+      }
+
+      // 默认待机动画始终循环；其余动作按显式参数 options.once 或动作目录默认规则决定是否只播一次。
+      const playOnce = path !== DEFAULT_MOTION && (options?.once ?? isOneShotMotion(path));
+      if (playOnce) {
+        nextAction.setLoop(THREE.LoopOnce, 1);
+        nextAction.clampWhenFinished = true;
+      } else {
+        nextAction.setLoop(THREE.LoopRepeat, Infinity);
+        nextAction.clampWhenFinished = false;
       }
 
       if (this.currentAction && this.currentAction !== nextAction) {
