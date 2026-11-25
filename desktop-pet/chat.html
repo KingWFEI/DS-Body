@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>小鲸娘对话</title>
+    <link rel="stylesheet" href="/src/chat.css" />
+  </head>
+  <body>
+    <main class="chat-window">
+      <header class="chat-header">
+        <div class="avatar" aria-hidden="true">🐳</div>
+        <div>
+          <h1>小鲸娘</h1>
+          <p>对话功能即将接入</p>
+        </div>
+      </header>
+
+      <section class="messages" aria-label="对话内容">
+        <div class="message pet-message">你好呀！这里很快就能和你聊天了。</div>
+        <p class="placeholder-note">当前是对话窗口预览，尚未连接后端智能体。</p>
+      </section>
+
+      <form class="composer" aria-label="消息输入区">
+        <input type="text" placeholder="对话功能接入后可发送消息" disabled />
+        <button type="button" aria-label="发送消息" disabled>➤</button>
+      </form>
+    </main>
+  </body>
+</html>

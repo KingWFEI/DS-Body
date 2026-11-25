@@ -1,0 +1,26 @@
+# OS & Editor
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.sw?
+
+# Logs & Local env
+*.log
+.env
+*.local
+
+# Frontend (desktop-pet)
+desktop-pet/node_modules/
+desktop-pet/dist/
+desktop-pet/dist-ssr/
+
+# Backend (agent-backend)
+agent-backend/.venv/
+agent-backend/venv/
+agent-backend/__pycache__/
+agent-backend/.pytest_cache/
+agent-backend/.ruff_cache/
+__pycache__/
+*.py[cod]
