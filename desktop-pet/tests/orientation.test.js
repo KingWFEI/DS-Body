@@ -33,7 +33,7 @@ test("derives target yaw relative to the model and camera calibration", () => {
   }), Math.PI / 4);
 });
 
-test("turns smoothly and keeps its final heading after movement stops", () => {
+test("turns toward movement direction and smoothly returns to front heading after movement stops", () => {
   const root = new THREE.Group();
   const camera = new THREE.PerspectiveCamera();
   camera.position.set(0, 1, 3);
@@ -54,9 +54,8 @@ test("turns smoothly and keeps its final heading after movement stops", () => {
   for (let i = 0; i < 120; i += 1) controller.update(movingState, 1 / 60);
   nearAngle(controller.getYawDegrees() * Math.PI / 180, Math.PI / 2, 0.002);
 
-  const heldYaw = controller.getYawDegrees();
-  for (let i = 0; i < 30; i += 1) {
+  for (let i = 0; i < 120; i += 1) {
     controller.update({ ...movingState, isMoving: false, speed: 0 }, 1 / 60);
   }
-  nearAngle(controller.getYawDegrees() * Math.PI / 180, heldYaw * Math.PI / 180, 0.002);
+  nearAngle(controller.getYawDegrees() * Math.PI / 180, 0, 0.002);
 });

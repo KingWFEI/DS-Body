@@ -55,7 +55,10 @@ export class CharacterOrientationController {
     return THREE.MathUtils.radToDeg(this.targetYaw);
   }
 
-  /** 根据锁定后的真实运动方向平滑转向；停下后保留最后朝向。 */
+  /**
+   * 移动过程中根据锁定后的真实运动方向平滑转向；
+   * 移动结束后自动平滑转回默认正面朝向（面向屏幕前的用户）。
+   */
   update(state, dt) {
     if (
       state.isMoving && state.faceTarget !== false &&
@@ -63,6 +66,13 @@ export class CharacterOrientationController {
     ) {
       this.targetYaw = getTargetYaw({
         direction: state.direction,
+        cameraHeading: getCameraHeading(this.camera, this.cameraTarget),
+        modelForwardYaw: this.modelForwardYaw,
+        facingOffset: this.facingOffset,
+      });
+    } else if (!state.isMoving) {
+      this.targetYaw = getTargetYaw({
+        direction: null,
         cameraHeading: getCameraHeading(this.camera, this.cameraTarget),
         modelForwardYaw: this.modelForwardYaw,
         facingOffset: this.facingOffset,

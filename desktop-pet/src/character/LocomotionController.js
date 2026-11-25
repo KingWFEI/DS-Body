@@ -242,17 +242,12 @@ export class LocomotionController {
       const previousMode = this.state.mode;
       const finalTarget = clonePoint(sample.targetPosition ?? this.state.targetPosition);
       if (finalTarget) this.state.targetPosition = finalTarget;
-      const area = findWorkArea(position, this.state.workAreas, this.state.windowSize);
-      const isGrounded = isInGroundBand(position, area, this.state.windowSize, this.config);
       const wasAirborne = ["jumping", "floating", "landing"].includes(previousMode);
-      if (isGrounded && (wasAirborne || sample.requestedMode === "air")) {
+      // 移动结束（到达或取消）后不再永久保持悬空姿态，统一经短暂着陆过渡恢复默认待机站姿。
+      if (wasAirborne || sample.requestedMode === "air") {
         this.state.mode = "landing";
         this.state.isGrounded = false;
         this.landingElapsed = 0;
-      } else if (!isGrounded) {
-        this.state.mode = "floating";
-        this.state.isGrounded = false;
-        this.state.airHeight = 1;
       } else {
         this.state.mode = "idle";
         this.state.isGrounded = true;
@@ -326,11 +321,10 @@ export class LocomotionController {
 
   #updateMode() {
     if (!this.activeMovement) {
-      if (this.state.mode === "landing") return;
       if (this.state.mode === "floating" || this.state.mode === "jumping") {
-        this.state.mode = "floating";
+        this.state.mode = "landing";
         this.state.isGrounded = false;
-        this.state.airHeight = 1;
+        this.landingElapsed = 0;
       }
       this.state.animation = this.#animationName();
       return;

@@ -2,6 +2,11 @@ import * as THREE from "three";
 import { createVRMAnimationClip } from "@pixiv/three-vrm-animation";
 import { DEFAULT_MOTION, isOneShotMotion, MOTION_OPTIONS, normalizeMotionPath } from "./motionCatalog.js";
 
+// 需要互斥切换并归零的情绪与口型预设表情（不触碰 blink 自动眨眼）
+const EMOTION_EXPRESSIONS = ["happy", "angry", "sad", "relaxed", "surprised"];
+const MOUTH_EXPRESSIONS = ["aa", "ih", "ou", "ee", "oh"];
+const FADE_DURATION = 0.25;
+
 /** 管理 VRMA 资源、动作切换和 VRM 表情，不负责界面或场景生命周期。 */
 export class MotionController {
   constructor({ loader, motionUrl, setStatus, motionOptions = MOTION_OPTIONS }) {
@@ -16,6 +21,10 @@ export class MotionController {
     this.requestId = 0;
     this.actionCache = new Map();
     this.expressionValues = new Map();
+    // 记录正在淡出的旧 AnimationAction，淡出完成后调用 stop() 彻底释放骨骼与表情轨道绑定
+    this.fadingActions = new Map();
+    // 记录临时表情（如对话触发的笑脸），倒计时结束后平滑淡出回默认表情
+    this.temporaryExpression = null;
   }
 
   /** 在模型加载后绑定 VRM 和 AnimationMixer。 */
@@ -64,17 +73,24 @@ export class MotionController {
       }
 
       if (this.currentAction && this.currentAction !== nextAction) {
-        this.currentAction.fadeOut(0.25);
+        this.currentAction.fadeOut(FADE_DURATION);
+        this.fadingActions.set(this.currentAction, FADE_DURATION + 0.04);
       }
+      this.fadingActions.delete(nextAction);
       nextAction.reset();
       nextAction.enabled = true;
       nextAction.setEffectiveWeight(1);
       nextAction.setEffectiveTimeScale(1);
-      nextAction.fadeIn(0.25).play();
+      nextAction.fadeIn(FADE_DURATION).play();
       this.currentAction = nextAction;
       this.activeMotion = path;
+      // 切回默认待机时，顺带清理上一支 VRMA（如舞蹈/挥手）可能遗留的口型或附带情绪权重
+      if (path === DEFAULT_MOTION) {
+        this.#clearResidualMorphs();
+      }
+      const duration = nextAction.getClip()?.duration ?? 0;
       this.setStatus(`正在播放：${path}`);
-      return { accepted: true, status: "playing", motion: path };
+      return { accepted: true, status: "playing", motion: path, duration };
     } catch (error) {
       this.setStatus(`动作失败：${error.message}`);
       console.error(error);
@@ -82,19 +98,116 @@ export class MotionController {
     }
   }
 
-  /** 设置指定表情的权重，范围限制为 0 到 1。 */
+  /**
+   * 每帧在 mixer.update 之后、vrm.update 之前调用：
+   * 1. 彻底 stop 已完成淡出的旧动作，释放其占用的手指/口型/表情轨道；
+   * 2. 推进临时对话表情的保持计时与平滑归零恢复。
+   */
+  update(dt) {
+    if (dt <= 0) return;
+
+    for (const [action, remaining] of this.fadingActions) {
+      const nextRemaining = remaining - dt;
+      if (nextRemaining <= 0) {
+        if (action !== this.currentAction) {
+          action.stop();
+        }
+        this.fadingActions.delete(action);
+        if (this.activeMotion === DEFAULT_MOTION) {
+          this.#clearResidualMorphs();
+        }
+      } else {
+        this.fadingActions.set(action, nextRemaining);
+      }
+    }
+
+    if (this.temporaryExpression) {
+      const temp = this.temporaryExpression;
+      if (temp.holdRemaining > 0) {
+        temp.holdRemaining = Math.max(0, temp.holdRemaining - dt);
+        this.#applyRawExpression(temp.name, temp.weight);
+      } else {
+        temp.weight *= Math.exp(-8 * dt);
+        if (temp.weight <= 0.015) {
+          this.#applyRawExpression(temp.name, 0);
+          this.temporaryExpression = null;
+        } else {
+          this.#applyRawExpression(temp.name, temp.weight);
+        }
+      }
+    }
+  }
+
+  #applyRawExpression(name, value) {
+    const manager = this.vrm?.expressionManager;
+    if (!manager?.getExpression(name)) return false;
+    const normalizedValue = THREE.MathUtils.clamp(value, 0, 1);
+    manager.setValue(name, normalizedValue);
+    this.expressionValues.set(name, normalizedValue);
+    return true;
+  }
+
+  #clearResidualMorphs() {
+    const activeTempName = this.temporaryExpression?.name ?? null;
+    for (const mouth of MOUTH_EXPRESSIONS) {
+      this.#applyRawExpression(mouth, 0);
+    }
+    for (const emotion of EMOTION_EXPRESSIONS) {
+      if (emotion !== activeTempName) {
+        this.#applyRawExpression(emotion, 0);
+      }
+    }
+  }
+
+  /** 重置所有情绪与口型表情回到默认自然状态。 */
+  resetExpressions() {
+    this.temporaryExpression = null;
+    this.#clearResidualMorphs();
+  }
+
+  /**
+   * 设置临时情绪表情（用于对话互动）：保持指定秒数后自动平滑淡回默认无表情状态。
+   * @param {string} name 表情名称（如 happy / surprised / neutral）。
+   * @param {number} [value=1] 表情最大权重 (0~1)。
+   * @param {number} [holdSeconds=3] 保持时长（秒），结束后自动平滑归零。
+   */
+  setTemporaryExpression(name, value = 1, holdSeconds = 3) {
+    if (typeof name !== "string" || !name.trim()) {
+      throw new TypeError("表情名称必须是非空字符串");
+    }
+    const target = name.trim();
+    if (target === "neutral") {
+      this.resetExpressions();
+      return true;
+    }
+
+    const clampedWeight = THREE.MathUtils.clamp(Number.isFinite(value) ? value : 1, 0, 1);
+    for (const emotion of EMOTION_EXPRESSIONS) {
+      if (emotion !== target) {
+        this.#applyRawExpression(emotion, 0);
+      }
+    }
+    if (!this.#applyRawExpression(target, clampedWeight)) {
+      return false;
+    }
+    this.temporaryExpression = {
+      name: target,
+      weight: clampedWeight,
+      holdRemaining: Math.max(0.5, Number.isFinite(holdSeconds) ? holdSeconds : 3),
+    };
+    return true;
+  }
+
+  /** 设置指定表情的权重，范围限制为 0 到 1（手动持久设置，会取消同名的临时自动恢复）。 */
   setExpression(name, value = 1) {
     if (typeof name !== "string" || !name.trim()) {
       throw new TypeError("表情名称必须是非空字符串");
     }
     if (!Number.isFinite(value)) throw new TypeError("表情强度必须是有限数字");
-    const manager = this.vrm?.expressionManager;
-    if (!manager?.getExpression(name)) return false;
-
-    const normalizedValue = THREE.MathUtils.clamp(value, 0, 1);
-    manager.setValue(name, normalizedValue);
-    this.expressionValues.set(name, normalizedValue);
-    return true;
+    if (this.temporaryExpression?.name === name) {
+      this.temporaryExpression = null;
+    }
+    return this.#applyRawExpression(name, value);
   }
 
   /** 在当前权重和 0/1 之间切换表情。 */

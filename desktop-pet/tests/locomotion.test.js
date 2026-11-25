@@ -176,6 +176,17 @@ test("keeps a horizontal step cycle while floating in the upper desktop area", (
   assert.equal(moving.mode, "floating");
   assert.equal(moving.animation, "procedural_float_walk");
   assert.equal(moving.airHeight, 1);
+
+  const arrivedUpper = controller.updateTelemetry({
+    ...shared,
+    status: "arrived",
+    position: { x: 900, y: 16 },
+    timestamp: 500,
+  });
+  assert.equal(arrivedUpper.mode, "landing");
+  const settledUpper = controller.advance(0.35);
+  assert.equal(settledUpper.mode, "idle");
+  assert.equal(settledUpper.airHeight, 0);
 });
 
 test("cancellation stops the active task without reporting arrival", () => {

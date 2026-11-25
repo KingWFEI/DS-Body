@@ -135,9 +135,10 @@ export function createDesktopPetApp() {
       locomotion.setYawDegrees(state.yawDegrees);
     }
 
-    // 1. 先撤销上一帧程序化偏移，再按 VRMA 基础姿势叠加当前步态。
+    // 1. 先撤销上一帧程序化偏移，再按 VRMA 基础姿势叠加当前步态，并推进动作/临时表情自动恢复。
     walkController?.restore();
     mixer?.update(deltaTime);
+    motionController.update(deltaTime);
     walkController?.update(deltaTime, state);
 
     // 2. 垂直移动通过视觉层起伏呈现，角色整体不倾斜。

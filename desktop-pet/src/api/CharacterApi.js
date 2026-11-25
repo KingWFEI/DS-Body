@@ -129,7 +129,8 @@ export function createCharacterApi({
 
   /**
    * 执行后端智能体伴随聊天回复下发的组合指令（表情、VRMA 动作、屏幕预设位置移动）。
-   * 任意子项异常均内部捕获，避免单条指令失败中断对话体验。
+   * 动作播放一遍后自动回默认待机；表情在动作期间（或约 3 秒阅读时间）保持后自动平滑恢复默认表情；
+   * 移动到达目标后自动平滑转回正面并恢复默认站姿。
    * @param {{motion?:string|null,expression?:string|null,expression_weight?:number,move_preset?:string|null}} action
    */
   async function applyAgentAction(action) {
@@ -138,34 +139,44 @@ export function createCharacterApi({
     }
 
     const summary = { applied: true, expression: null, motion: null, movePreset: null };
+    let motionDuration = 0;
 
-    // 1. 优先更新面部情绪表情，先重置旧情绪权重以防叠加变形
-    if (typeof action.expression === "string" && action.expression.trim()) {
-      const targetExpression = action.expression.trim();
-      const weight = Number.isFinite(action.expression_weight) ? action.expression_weight : 1;
-      for (const emotion of EMOTION_EXPRESSIONS) {
-        if (emotion !== targetExpression) {
-          motionController.setExpression(emotion, 0);
-        }
-      }
-      if (targetExpression === "neutral") {
-        summary.expression = "neutral";
-      } else if (motionController.setExpression(targetExpression, weight)) {
-        summary.expression = targetExpression;
-      }
-    }
-
-    // 2. 触发伴随的 VRMA 骨骼动作（对话触发的动作固定只播放一次，播完自动恢复默认待机）
+    // 1. 先触发伴随的 VRMA 骨骼动作（单次播放，获取动画时长以对齐表情保持时间）
     if (typeof action.motion === "string" && action.motion.trim()) {
       try {
         const motionResult = await playMotion(action.motion.trim(), { once: true });
         summary.motion = motionResult.motion;
+        motionDuration = Number.isFinite(motionResult.duration) ? motionResult.duration : 0;
       } catch (error) {
         console.warn("执行智能体动作失败：", error);
       }
     }
 
-    // 3. 触发屏幕预设移动（非阻塞或等待结果均可，这里异步启动并在内部捕获非 Electron 环境错误）
+    // 2. 设置临时面部情绪表情：在动作持续时间或至少 3 秒后自动平滑淡回默认自然表情
+    if (typeof action.expression === "string" && action.expression.trim()) {
+      const targetExpression = action.expression.trim();
+      const weight = Number.isFinite(action.expression_weight) ? action.expression_weight : 1;
+      const holdSeconds = Math.min(Math.max(motionDuration, 3.0), 8.0);
+
+      if (typeof motionController.setTemporaryExpression === "function") {
+        if (motionController.setTemporaryExpression(targetExpression, weight, holdSeconds)) {
+          summary.expression = targetExpression;
+        }
+      } else {
+        for (const emotion of EMOTION_EXPRESSIONS) {
+          if (emotion !== targetExpression) {
+            motionController.setExpression(emotion, 0);
+          }
+        }
+        if (targetExpression === "neutral") {
+          summary.expression = "neutral";
+        } else if (motionController.setExpression(targetExpression, weight)) {
+          summary.expression = targetExpression;
+        }
+      }
+    }
+
+    // 3. 触发屏幕预设移动（到达后由 LocomotionController 和 OrientationController 自动恢复正面待机）
     if (typeof action.move_preset === "string" && action.move_preset.trim()) {
       const preset = action.move_preset.trim();
       summary.movePreset = preset;
@@ -254,6 +265,7 @@ export function createCharacterApi({
     playMotion,
     onMotionChanged,
     setExpression: (name, value = 1) => motionController.setExpression(name, value),
+    resetExpressions: () => motionController.resetExpressions?.(),
     toggleExpression: (name) => motionController.toggleExpression(name),
     getExpression: (name) => motionController.getExpression(name),
     getAvailableExpressions: () => motionController.getAvailableExpressions(),
