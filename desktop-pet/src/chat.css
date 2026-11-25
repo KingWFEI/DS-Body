@@ -8,16 +8,210 @@
 * { box-sizing: border-box; }
 html, body { width: 100%; height: 100%; margin: 0; }
 body { padding: 0; }
-.chat-window { display: flex; flex-direction: column; width: 100%; height: 100%; background: #f4f7fb; }
-.chat-header { display: flex; align-items: center; gap: 12px; padding: 18px 20px; background: #fff; border-bottom: 1px solid #e3eaf2; }
-.avatar { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; background: #e4f4ff; font-size: 23px; }
-.chat-header h1 { margin: 0; font-size: 15px; }
-.chat-header p { margin: 4px 0 0; color: #8290a3; font-size: 11px; }
-.messages { display: flex; flex: 1; flex-direction: column; align-items: flex-start; gap: 14px; overflow: auto; padding: 20px 16px; }
-.message { max-width: 85%; padding: 11px 13px; border-radius: 14px 14px 14px 4px; background: #fff; box-shadow: 0 2px 8px rgba(23, 46, 75, .06); font-size: 13px; line-height: 1.6; }
-.placeholder-note { align-self: center; margin: auto 0 12px; color: #9aa6b6; font-size: 11px; text-align: center; }
-.composer { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #e3eaf2; background: #fff; }
-.composer input { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid #e1e7ef; border-radius: 10px; outline: 0; color: #77869a; background: #f7f9fc; font: inherit; font-size: 12px; }
-.composer input:disabled { opacity: 1; }
-.composer button { width: 38px; border: 0; border-radius: 10px; color: #fff; background: #81b7d8; font-size: 17px; }
-.composer button:disabled { opacity: .55; }
+
+.chat-window {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: #f4f7fb;
+}
+
+/* 顶部标题栏与连接状态 */
+.chat-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  background: #fff;
+  border-bottom: 1px solid #e3eaf2;
+}
+
+.avatar {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #e4f4ff;
+  font-size: 22px;
+}
+
+.header-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-header h1 {
+  margin: 0;
+  font-size: 15px;
+  color: #16263b;
+}
+
+.status-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: #7b8a9e;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-badge::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: #9aa6b6;
+}
+
+.status-online { color: #20784c; }
+.status-online::before { background: #26a269; }
+
+.status-demo { color: #9a6700; }
+.status-demo::before { background: #d48806; }
+
+.status-offline { color: #b42318; }
+.status-offline::before { background: #d92d20; }
+
+.clear-btn {
+  padding: 5px 10px;
+  border: 1px solid #dce5f0;
+  border-radius: 8px;
+  background: #f8fafd;
+  color: #4f627a;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.clear-btn:hover {
+  background: #edf3fa;
+  color: #1b2a40;
+}
+
+/* 消息滚动区 */
+.messages {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  padding: 16px 14px;
+}
+
+.message-group {
+  display: flex;
+  flex-direction: column;
+  max-width: 86%;
+  gap: 4px;
+}
+
+.message-group.pet { align-self: flex-start; }
+.message-group.user { align-self: flex-end; }
+
+.message {
+  padding: 10px 13px;
+  font-size: 13px;
+  line-height: 1.58;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.pet-message {
+  border-radius: 14px 14px 14px 4px;
+  background: #fff;
+  color: #1b2a40;
+  box-shadow: 0 2px 8px rgba(23, 46, 75, 0.06);
+}
+
+.user-message {
+  border-radius: 14px 14px 4px 14px;
+  background: #3b82f6;
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.22);
+}
+
+.typing-message {
+  color: #7c8da3;
+  font-style: italic;
+}
+
+.action-tag {
+  align-self: flex-start;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #e8f3ff;
+  color: #29629c;
+  font-size: 10px;
+}
+
+.system-note {
+  align-self: center;
+  margin: 4px 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(215, 226, 240, 0.45);
+  color: #6d7f96;
+  font-size: 11px;
+  text-align: center;
+}
+
+/* 底部输入框 */
+.composer {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid #e3eaf2;
+  background: #fff;
+}
+
+.composer input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #d8e1ec;
+  border-radius: 10px;
+  outline: 0;
+  color: #1b2a40;
+  background: #f8fafd;
+  font: inherit;
+  font-size: 12.5px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.composer input:focus {
+  border-color: #5b9bd5;
+  background: #fff;
+}
+
+.composer input:disabled {
+  color: #8a99ad;
+  background: #f1f5f9;
+}
+
+.composer button {
+  width: 40px;
+  border: 0;
+  border-radius: 10px;
+  color: #fff;
+  background: #3b82f6;
+  font-size: 16px;
+  cursor: pointer;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.composer button:hover:not(:disabled) {
+  background: #2563eb;
+}
+
+.composer button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

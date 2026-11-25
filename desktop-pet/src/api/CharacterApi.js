@@ -15,6 +15,8 @@ export function createCharacterApi({
   const movementListeners = new Set();
   const motionListeners = new Set();
   let lastMovementSignature = "";
+  // 切换情绪表情时需要归零的互斥情绪列表，避免多个情绪叠加导致五官变形。
+  const EMOTION_EXPRESSIONS = ["happy", "angry", "sad", "relaxed", "surprised"];
 
   function getMovementState() {
     return locomotion.getState();
@@ -125,6 +127,56 @@ export function createCharacterApi({
     return result;
   }
 
+  /**
+   * 执行后端智能体伴随聊天回复下发的组合指令（表情、VRMA 动作、屏幕预设位置移动）。
+   * 任意子项异常均内部捕获，避免单条指令失败中断对话体验。
+   * @param {{motion?:string|null,expression?:string|null,expression_weight?:number,move_preset?:string|null}} action
+   */
+  async function applyAgentAction(action) {
+    if (!action || typeof action !== "object") {
+      return { applied: false };
+    }
+
+    const summary = { applied: true, expression: null, motion: null, movePreset: null };
+
+    // 1. 优先更新面部情绪表情，先重置旧情绪权重以防叠加变形
+    if (typeof action.expression === "string" && action.expression.trim()) {
+      const targetExpression = action.expression.trim();
+      const weight = Number.isFinite(action.expression_weight) ? action.expression_weight : 1;
+      for (const emotion of EMOTION_EXPRESSIONS) {
+        if (emotion !== targetExpression) {
+          motionController.setExpression(emotion, 0);
+        }
+      }
+      if (targetExpression === "neutral") {
+        summary.expression = "neutral";
+      } else if (motionController.setExpression(targetExpression, weight)) {
+        summary.expression = targetExpression;
+      }
+    }
+
+    // 2. 触发伴随的 VRMA 骨骼动作
+    if (typeof action.motion === "string" && action.motion.trim()) {
+      try {
+        const motionResult = await playMotion(action.motion.trim());
+        summary.motion = motionResult.motion;
+      } catch (error) {
+        console.warn("执行智能体动作失败：", error);
+      }
+    }
+
+    // 3. 触发屏幕预设移动（非阻塞或等待结果均可，这里异步启动并在内部捕获非 Electron 环境错误）
+    if (typeof action.move_preset === "string" && action.move_preset.trim()) {
+      const preset = action.move_preset.trim();
+      summary.movePreset = preset;
+      moveToPreset(preset).catch((error) => {
+        console.warn("执行智能体屏幕移动失败：", error);
+      });
+    }
+
+    return summary;
+  }
+
   /** 订阅运动状态；注册时立即发送当前快照，返回的函数可取消订阅。 */
   function onMovementChanged(callback) {
     if (typeof callback !== "function") throw new TypeError("状态订阅参数必须是函数");
@@ -170,6 +222,19 @@ export function createCharacterApi({
     });
   });
 
+  // 监听 Electron 主进程转发的对话窗口智能体动作指令。
+  if (typeof movementBridge?.onAgentAction === "function") {
+    movementBridge.onAgentAction((action) => {
+      void applyAgentAction(action);
+    });
+  } else if (typeof globalThis.BroadcastChannel === "function") {
+    // 浏览器多标签页开发预览模式下的降级联动通道。
+    const channel = new globalThis.BroadcastChannel("ds-body:agent-action");
+    channel.addEventListener("message", (event) => {
+      void applyAgentAction(event.data);
+    });
+  }
+
   /**
    * 冻结公开对象，避免后端或其他调用者意外替换控制方法。
    * `window.character` 即为唯一业务控制入口。
@@ -179,6 +244,7 @@ export function createCharacterApi({
     moveToPreset,
     stopMovement,
     openChatWindow,
+    applyAgentAction,
     setModelScale,
     getModelScale: () => modelScaleController?.getScale() ?? 1,
     onModelScaleChanged: (callback) => modelScaleController?.onChange(callback) ?? (() => {}),

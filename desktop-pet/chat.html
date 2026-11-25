@@ -10,21 +10,26 @@
     <main class="chat-window">
       <header class="chat-header">
         <div class="avatar" aria-hidden="true">🐳</div>
-        <div>
+        <div class="header-meta">
           <h1>小鲸娘</h1>
-          <p>对话功能即将接入</p>
+          <p id="connectionStatus" class="status-badge status-checking">正在检测智能体连接…</p>
         </div>
+        <button id="clearBtn" class="clear-btn" type="button" title="清空当前对话记录">清空</button>
       </header>
 
-      <section class="messages" aria-label="对话内容">
-        <div class="message pet-message">你好呀！这里很快就能和你聊天了。</div>
-        <p class="placeholder-note">当前是对话窗口预览，尚未连接后端智能体。</p>
-      </section>
+      <section id="messages" class="messages" aria-label="对话内容" aria-live="polite"></section>
 
-      <form class="composer" aria-label="消息输入区">
-        <input type="text" placeholder="对话功能接入后可发送消息" disabled />
-        <button type="button" aria-label="发送消息" disabled>➤</button>
+      <form id="chatForm" class="composer" aria-label="消息输入区">
+        <input
+          id="messageInput"
+          type="text"
+          maxlength="2000"
+          placeholder="输入消息和小鲸娘聊天吧…（Enter 发送）"
+          autocomplete="off"
+        />
+        <button id="sendBtn" type="submit" aria-label="发送消息" title="发送">➤</button>
       </form>
     </main>
+    <script type="module" src="/src/chat.js"></script>
   </body>
 </html>

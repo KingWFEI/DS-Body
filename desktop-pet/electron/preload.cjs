@@ -21,4 +21,11 @@ contextBridge.exposeInMainWorld('__desktopPetBridge', {
     ipcRenderer.on('pet:movement-state', listener);
     return () => ipcRenderer.removeListener('pet:movement-state', listener);
   },
+  // 订阅来自独立对话窗口转发的智能体角色控制指令（动作、表情、预设移动）。
+  onAgentAction: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, action) => callback(action);
+    ipcRenderer.on('pet:agent-action', listener);
+    return () => ipcRenderer.removeListener('pet:agent-action', listener);
+  },
 });

@@ -4,8 +4,10 @@ import { createCharacterApi } from "../src/api/CharacterApi.js";
 
 test("unified character API forwards commands and waits for movement completion", async () => {
   let movementListener;
+  let agentActionListener;
   let presetCall;
   let activeMotion = "idle/idle.vrma";
+  const expressionCalls = [];
   let movementState = {
     position: { x: 20, y: 30 },
     targetPosition: null,
@@ -34,6 +36,7 @@ test("unified character API forwards commands and waits for movement completion"
     }),
     stopMovement: () => ({ stopped: true, status: "cancelled" }),
     onMovementChanged: (callback) => { movementListener = callback; },
+    onAgentAction: (callback) => { agentActionListener = callback; },
   };
   const locomotion = {
     getMovementMode: () => "ground",
@@ -50,7 +53,10 @@ test("unified character API forwards commands and waits for movement completion"
       return { accepted: true, status: "playing", motion: name };
     },
     getActiveMotion: () => activeMotion,
-    setExpression: () => true,
+    setExpression: (name, value) => {
+      expressionCalls.push({ name, value });
+      return true;
+    },
     toggleExpression: () => ({ success: true, name: "happy", value: 1 }),
     getExpression: () => 0,
     getAvailableExpressions: () => ["happy"],
@@ -110,4 +116,18 @@ test("unified character API forwards commands and waits for movement completion"
   publishMovementState(movementState);
   assert.ok(observedMovement.includes("floating"));
   unsubscribeMovement();
+
+  const summary = await api.applyAgentAction({
+    motion: "dance/dance1",
+    expression: "happy",
+    expression_weight: 0.85,
+    move_preset: "right",
+  });
+  assert.equal(summary.applied, true);
+  assert.equal(summary.motion, "dance/dance1");
+  assert.equal(summary.expression, "happy");
+  assert.equal(summary.movePreset, "right");
+  assert.ok(expressionCalls.some((item) => item.name === "sad" && item.value === 0));
+  assert.ok(expressionCalls.some((item) => item.name === "happy" && item.value === 0.85));
+  assert.equal(typeof agentActionListener, "function");
 });

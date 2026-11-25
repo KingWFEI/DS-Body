@@ -465,14 +465,15 @@ function openChatWindow() {
   }
 
   chatWindow = new BrowserWindow({
-    width: 320,
-    height: 460,
+    width: 340,
+    height: 480,
     title: "小鲸娘对话",
     parent: petWindow,
     show: false,
     resizable: false,
     backgroundColor: "#f4f7fb",
     webPreferences: {
+      preload: path.join(__dirname, "chat-preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -511,6 +512,25 @@ app.whenReady().then(() => {
   ipcMain.handle("pet:open-chat-window", (event) => {
     assertOwner(event);
     return openChatWindow();
+  });
+  // 接收来自对话窗口（或主窗口）的智能体动作指令，并转发给 3D 桌宠渲染进程执行。
+  ipcMain.handle("pet:dispatch-agent-action", (event, action) => {
+    const isFromChat = chatWindow && !chatWindow.isDestroyed() && event.sender === chatWindow.webContents;
+    const isFromPet = petWindow && !petWindow.isDestroyed() && event.sender === petWindow.webContents;
+    if (!isFromChat && !isFromPet) {
+      throw new Error("无权向桌宠发送智能体动作指令");
+    }
+    if (
+      !action ||
+      typeof action !== "object" ||
+      !petWindow ||
+      petWindow.isDestroyed() ||
+      petWindow.webContents.isDestroyed()
+    ) {
+      return { forwarded: false };
+    }
+    petWindow.webContents.send("pet:agent-action", action);
+    return { forwarded: true };
   });
   ipcMain.on("pet:set-interaction-regions", (event, regions) => {
     if (!petWindow || event.sender !== petWindow.webContents) return;
