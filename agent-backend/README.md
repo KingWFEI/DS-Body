@@ -1,43 +1,41 @@
 # agent-backend
 
-`DS-Body` 的后端智能体服务，基于 **Python 3.11+ / FastAPI / DeepSeek API**，负责处理小鲸娘的多轮对话记忆、结构化大模型编排，并向前端 3D 桌宠同步下发动作、表情与屏幕移动指令。
+`DS-Body` 的后端智能体服务，基于 **Python 3.11+ / FastAPI / LangGraph / DeepSeek / 本地 SQLite**，负责管理小鲸娘的多轮对话持久化记忆、情绪连续状态、外部工具调用以及 3D 动作与表情编排。
+
+## 核心架构 (`app/graph/`)
+
+```text
+START ──▶ [agent 节点]（注入延续心情 mood + 安全裁剪历史窗口 + 调用 DeepSeek）
+              │
+              ├── 调用外部感知工具（如 get_current_time）──▶ [tools 节点] ──▶ 回到 [agent 节点]
+              │
+              └── 调用 submit_pet_reply ──────────────────▶ [finalize 节点]（闭合消息链 + 白名单清洗 + 更新心情）──▶ END
+                                                                    │
+                                                     自动由 AsyncSqliteSaver 持久化至
+                                                       data/pet_memory.sqlite
+```
+
+- **彻底告别多轮空返回**：通过 LangChain / DeepSeek 原生 Tool Calling（`submit_pet_reply`）输出结构化回复与动作，并在 `finalize` 节点自动补齐配对 `ToolMessage` 与断电自愈校验。
+- **本地 SQLite 记忆持久化**：默认保存在 `agent-backend/data/pet_memory.sqlite`（已在 `.gitignore` 忽略），重启后端服务依然保留之前的聊天上下文与小鲸娘的心情状态；前端点击“清空”按钮会直接从 SQLite 删除对应 `session_id`（`thread_id`）。
+- **易扩展工具箱**：在 `app/graph/tools.py` 的 `EXTERNAL_TOOLS` 列表中注册 `@tool` 函数（目前已内置本地日期/时间/星期/时段感知工具 `get_current_time`），Agent 即可自动按需调用。
 
 ## 1. 填入你的 DeepSeek 密钥
 
-直接打开本目录下的 **`agent-backend/.env`** 文件（该文件已在 `.gitignore` 中忽略，不会上传到 GitHub），将占位符替换为你的真实密钥：
+打开本目录下的 **`agent-backend/.env`** 文件（本地忽略文件，不会提交到 GitHub），填入你的密钥：
 
 ```dotenv
 DEEPSEEK_API_KEY=sk-在这里填入你的真实DeepSeek密钥
 ```
 
-> 还没有填入密钥时，后端会自动以 **演示模式** 运行，依然可以测试聊天窗口及“跳舞”“去左边”等桌宠动作联动！填入真实密钥后重启后端即可切换为 DeepSeek 智能对话。
-
 ## 2. 启动服务
 
 ```bash
 cd agent-backend
-
-# 方式一：使用 uv（推荐）
 uv sync
 uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-
-# 方式二：使用 venv + pip
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-## 3. 接口说明
-
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| `GET` | `/health` | 检查服务状态与 `DEEPSEEK_API_KEY` 是否已完成配置 |
-| `POST` | `/api/v1/chat` | 发送聊天消息，返回 `reply` 文本与 `action`（`motion` / `expression` / `move_preset`） |
-| `POST` | `/api/v1/chat/clear` | 清空指定 `session_id` 的多轮对话上下文 |
-| `GET` | `/docs` | Swagger 交互式接口文档 |
-
-## 4. 运行测试
+## 3. 运行测试
 
 ```bash
 uv run pytest

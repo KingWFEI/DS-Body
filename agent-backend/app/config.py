@@ -10,7 +10,7 @@
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# 定位 agent-backend 目录下的 .env 文件，确保从任意工作目录启动都能正确读取配置
+# 定位 agent-backend 目录，确保从任意工作目录启动都能正确定位 .env 和本地 SQLite 数据库
 BASE_DIR = Path(__file__).resolve().parent.parent
 ENV_FILE_PATH = BASE_DIR / ".env"
 
@@ -22,11 +22,11 @@ FALLBACK_DEEPSEEK_API_KEY = "sk-请在这里填入你的DeepSeek密钥"
 
 
 class Settings(BaseSettings):
-    """应用运行参数与 DeepSeek 大模型连接配置。"""
+    """应用运行参数、DeepSeek 模型参数与本地 SQLite 记忆库配置。"""
 
     # 服务基础信息
     app_name: str = "DS-Body Agent Backend"
-    app_version: str = "0.2.0"
+    app_version: str = "0.3.0"
     app_host: str = "127.0.0.1"
     app_port: int = 8000
     cors_origins: str = "http://127.0.0.1:5173,http://localhost:5173"
@@ -38,8 +38,9 @@ class Settings(BaseSettings):
     deepseek_temperature: float = 0.8
     deepseek_timeout_seconds: float = 45.0
 
-    # 会话上下文记忆配置
+    # 会话上下文裁剪与本地 SQLite 持久化路径
     max_history_rounds: int = 10
+    sqlite_db_path: str = "data/pet_memory.sqlite"
 
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE_PATH),
@@ -75,8 +76,24 @@ class Settings(BaseSettings):
 
     @property
     def effective_base_url(self) -> str:
-        """规范化 DeepSeek API 基础 URL，去除末尾斜杠。"""
+        """规范化 DeepSeek API 基础 URL，兼容 OpenAI SDK 协议。"""
         return self.deepseek_base_url.rstrip("/")
+
+    @property
+    def resolved_sqlite_path(self) -> str:
+        """
+        解析本地 SQLite 数据库连接路径：
+        - `:memory:` 原样返回（供单元测试使用内存库）；
+        - 相对路径自动相对于 `agent-backend/` 目录解析，并确保父目录存在。
+        """
+        raw = self.sqlite_db_path.strip()
+        if raw == ":memory:":
+            return ":memory:"
+        path = Path(raw)
+        if not path.is_absolute():
+            path = (BASE_DIR / path).resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return str(path)
 
 
 settings = Settings()

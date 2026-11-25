@@ -68,7 +68,7 @@ class ChatRequest(BaseModel):
         default="default",
         min_length=1,
         max_length=64,
-        description="会话唯一标识，用于隔离多轮对话上下文记忆",
+        description="会话唯一标识（对应 LangGraph 的 thread_id，持久化存储在本地 SQLite 中）",
     )
     pet_state: dict[str, Any] | None = Field(
         default=None,
@@ -101,7 +101,7 @@ class ClearSessionResponse(BaseModel):
     """清空会话历史的响应结果。"""
 
     session_id: str = Field(description="已清空的会话 ID")
-    cleared: bool = Field(description="是否成功清空")
+    cleared: bool = Field(description="是否成功从本地 SQLite 清理该会话记忆")
 
 
 class HealthResponse(BaseModel):
@@ -109,5 +109,6 @@ class HealthResponse(BaseModel):
 
     status: str = Field(description="服务运行状态，正常为 'ok'")
     service: str = Field(description="服务名称")
+    engine: str = Field(default="langgraph+sqlite", description="智能体编排与记忆存储引擎")
     model: str = Field(description="当前配置的 DeepSeek 模型名称")
     api_key_configured: bool = Field(description="是否已配置有效的 DeepSeek API 密钥")

@@ -1,95 +1,178 @@
-"""后端智能体接口与动作解析单元测试。"""
+"""LangGraph 状态图、工具调用与本地 SQLite 记忆持久化单元测试。"""
 
-import json
-import pytest
+from pathlib import Path
+from typing import Any
+
 from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
+import pytest
 
 from app.config import API_KEY_PLACEHOLDER, Settings
+from app.graph.tools import SUBMIT_REPLY_TOOL_NAME
+from app.graph.workflow import prepare_llm_messages
 from app.main import app
 from app.schemas import ChatRequest
 from app.services.agent_service import AgentService
 
-client = TestClient(app)
+
+class ScriptedFakeLLM:
+    """按预设队列依次返回 AIMessage 的轻量级测试替身，并记录每次收到的上下文消息。"""
+
+    def __init__(self, responses: list[AIMessage]) -> None:
+        self._responses = list(responses)
+        self.recorded_calls: list[list[AnyMessage]] = []
+
+    async def ainvoke(self, messages: list[AnyMessage]) -> AIMessage:
+        self.recorded_calls.append(list(messages))
+        if not self._responses:
+            raise AssertionError("ScriptedFakeLLM 预设响应已耗尽")
+        return self._responses.pop(0)
 
 
-def test_health_check_placeholder_key() -> None:
-    """默认占位符状态下，健康检查应正常返回且标记 api_key_configured 为 False。"""
-    response = client.get("/health")
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["status"] == "ok"
-    assert payload["model"] == "deepseek-chat"
-    assert isinstance(payload["api_key_configured"], bool)
+def test_health_and_clear_endpoints() -> None:
+    """验证健康检查包含 langgraph+sqlite 引擎标识，且清空会话接口在生命周期内正常工作。"""
+    with TestClient(app) as client:
+        health = client.get("/health")
+        assert health.status_code == 200
+        payload = health.json()
+        assert payload["status"] == "ok"
+        assert payload["engine"] == "langgraph+sqlite"
 
-
-def test_demo_mode_keyword_actions() -> None:
-    """未填入真实密钥时，演示模式应正常响应并根据关键词触发对应动作或移动指令。"""
-    service = AgentService(Settings(deepseek_api_key=API_KEY_PLACEHOLDER))
-
-    import asyncio
-
-    dance_res = asyncio.run(
-        service.chat(ChatRequest(message="给我跳支舞吧", session_id="demo-1"))
-    )
-    assert dance_res.using_mock is True
-    assert dance_res.action is not None
-    assert dance_res.action.motion == "dance/dance1"
-
-    move_res = asyncio.run(
-        service.chat(ChatRequest(message="去左边待一会儿", session_id="demo-1"))
-    )
-    assert move_res.using_mock is True
-    assert move_res.action is not None
-    assert move_res.action.move_preset == "left"
+        clear_res = client.post("/api/v1/chat/clear", json={"session_id": "api-clear-test"})
+        assert clear_res.status_code == 200
+        assert clear_res.json()["cleared"] is True
 
 
 @pytest.mark.anyio
-async def test_deepseek_json_parsing_and_multi_turn_memory(monkeypatch: pytest.MonkeyPatch) -> None:
-    """填入有效密钥后，应正确解析 DeepSeek 返回的 JSON、过滤非法动作并维护多轮历史。"""
-    service = AgentService(Settings(deepseek_api_key="sk-unit-test-valid-key", max_history_rounds=3))
+async def test_demo_mode_without_api_key() -> None:
+    """未填入真实密钥时，服务应自动降级到本地关键词演示模式。"""
+    service = AgentService(Settings(deepseek_api_key=API_KEY_PLACEHOLDER, sqlite_db_path=":memory:"))
+    try:
+        dance_res = await service.chat(ChatRequest(message="来跳支舞吧", session_id="demo"))
+        assert dance_res.using_mock is True
+        assert dance_res.action is not None
+        assert dance_res.action.motion == "dance/dance1"
+    finally:
+        await service.shutdown()
 
-    async def fake_call_deepseek(messages: list[dict[str, str]]) -> str:
-        # 验证历史消息按轮次递增传入
-        assert messages[0]["role"] == "system"
-        return (
-            "```json\n"
-            + json.dumps(
-                {
-                    "reply": "好呀，向你挥挥手！",
-                    "action": {
-                        "motion": "attention/wave hand 1.vrma",
-                        "expression": "happy",
-                        "expression_weight": 0.9,
-                        "move_preset": "invalid-direction",  # 非法预设方向应被安全过滤为 None
-                    },
-                },
-                ensure_ascii=False,
+
+@pytest.mark.anyio
+async def test_langgraph_tool_loop_and_sqlite_persistence_across_restarts(tmp_path: Path) -> None:
+    """
+    验证完整核心链路：
+    1. 第 1 轮先调用 `get_current_time` 工具，再调用 `submit_pet_reply` 输出回复与动作，且非法方向被过滤；
+    2. 关闭服务后重新实例化（模拟重启后端进程），从同一个本地 SQLite 文件恢复历史对话与心情状态；
+    3. 第 2 轮发送消息时，大模型收到的历史消息链闭合完整（每条 tool_calls 均有配对 ToolMessage）；
+    4. 调用 `clear_session` 后，SQLite 中该会话的持久化数据被彻底清除。
+    """
+    db_file = tmp_path / "pet_memory.sqlite"
+    test_settings = Settings(
+        deepseek_api_key="sk-unit-test-valid",
+        sqlite_db_path=str(db_file),
+        max_history_rounds=5,
+    )
+
+    # ---------- 进程实例 1：测试外部工具循环 + 首次持久化 ----------
+    llm_round_1 = ScriptedFakeLLM(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "call_time_1",
+                        "name": "get_current_time",
+                        "args": {},
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "call_reply_1",
+                        "name": SUBMIT_REPLY_TOOL_NAME,
+                        "args": {
+                            "reply": "我看了一眼时间，现在向你挥挥手问好呀！",
+                            "motion": "attention/wave hand 1.vrma",
+                            "expression": "relaxed",
+                            "expression_weight": 0.9,
+                            "move_preset": "mars",  # 非法预设方向，应被清洗为 None
+                        },
+                    }
+                ],
+            ),
+        ]
+    )
+    service_1 = AgentService(config=test_settings, llm_override=llm_round_1)
+    res_1 = await service_1.chat(ChatRequest(message="现在几点啦？", session_id="persist-thread"))
+    assert res_1.using_mock is False
+    assert res_1.reply == "我看了一眼时间，现在向你挥挥手问好呀！"
+    assert res_1.action is not None
+    assert res_1.action.motion == "attention/wave hand 1"
+    assert res_1.action.expression == "relaxed"
+    assert res_1.action.move_preset is None
+    assert len(llm_round_1.recorded_calls) == 2  # 第 1 次调时间工具，第 2 次拿时间结果生成回复
+    await service_1.shutdown()
+
+    assert db_file.exists()
+
+    # ---------- 进程实例 2（模拟重启后端）：验证从磁盘 SQLite 恢复记忆与情绪 ----------
+    llm_round_2 = ScriptedFakeLLM(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "id": "call_reply_2",
+                        "name": SUBMIT_REPLY_TOOL_NAME,
+                        "args": {
+                            "reply": "当然记得呀，刚才帮你看过时间呢！",
+                            "motion": None,
+                            "expression": "happy",
+                        },
+                    }
+                ],
             )
-            + "\n```"
+        ]
+    )
+    service_2 = AgentService(config=test_settings, llm_override=llm_round_2)
+    try:
+        restored_history = await service_2.get_history("persist-thread")
+        assert restored_history == [
+            {"role": "user", "content": "现在几点啦？"},
+            {"role": "assistant", "content": "我看了一眼时间，现在向你挥挥手问好呀！"},
+        ]
+
+        res_2 = await service_2.chat(
+            ChatRequest(message="你还记得刚才做了什么吗？", session_id="persist-thread")
         )
+        assert res_2.reply == "当然记得呀，刚才帮你看过时间呢！"
 
-    monkeypatch.setattr(service, "_call_deepseek", fake_call_deepseek)
+        # 检查发给大模型的提示词中是否继承了上一轮的 relaxed 心情，且所有 tool_calls 均有配对 ToolMessage
+        sent_messages = llm_round_2.recorded_calls[0]
+        assert "relaxed" in str(sent_messages[0].content)
+        tool_Msg_ids = {m.tool_call_id for m in sent_messages if isinstance(m, ToolMessage)}
+        assert {"call_time_1", "call_reply_1"}.issubset(tool_Msg_ids)
 
-    result = await service.chat(ChatRequest(message="你好小鲸娘", session_id="s-real"))
-    assert result.using_mock is False
-    assert result.reply == "好呀，向你挥挥手！"
-    assert result.action is not None
-    assert result.action.motion == "attention/wave hand 1"
-    assert result.action.expression == "happy"
-    assert result.action.expression_weight == 0.9
-    assert result.action.move_preset is None
-
-    history = service.get_history("s-real")
-    assert len(history) == 2
-    assert history[0] == {"role": "user", "content": "你好小鲸娘"}
-    assert history[1] == {"role": "assistant", "content": "好呀，向你挥挥手！"}
-
-    assert service.clear_session("s-real") is True
-    assert service.get_history("s-real") == []
+        # 验证清空会话能够删除 SQLite 中的记录
+        assert await service_2.clear_session("persist-thread") is True
+        assert await service_2.get_history("persist-thread") == []
+    finally:
+        await service_2.shutdown()
 
 
-def test_clear_endpoint() -> None:
-    """清空会话接口应正常返回。"""
-    response = client.post("/api/v1/chat/clear", json={"session_id": "test-clear"})
-    assert response.status_code == 200
-    assert response.json()["session_id"] == "test-clear"
+def test_prepare_llm_messages_heals_dangling_tool_calls() -> None:
+    """验证若上次进程在工具调用中途强退遗留了未闭合的 tool_call_id，准备消息时会自动补齐。"""
+    broken_history: list[AnyMessage] = [
+        HumanMessage(content="第一句话"),
+        AIMessage(
+            content="",
+            tool_calls=[{"id": "dangling_1", "name": SUBMIT_REPLY_TOOL_NAME, "args": {"reply": "半截"}}],
+        ),
+        # 注意：这里故意缺失对应的 ToolMessage
+        HumanMessage(content="第二句话"),
+    ]
+    healed = prepare_llm_messages(broken_history, max_rounds=5, system_prompt="sys")
+    tool_msgs = [m for m in healed if isinstance(m, ToolMessage)]
+    assert len(tool_msgs) == 1
+    assert tool_msgs[0].tool_call_id == "dangling_1"

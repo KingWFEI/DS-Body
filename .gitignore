@@ -22,5 +22,11 @@ agent-backend/venv/
 agent-backend/__pycache__/
 agent-backend/.pytest_cache/
 agent-backend/.ruff_cache/
+agent-backend/data/
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.db
 __pycache__/
 *.py[cod]
