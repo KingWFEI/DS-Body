@@ -25,19 +25,19 @@ html, body {
   justify-content: flex-end;
 }
 
-/* 使用透明无边框图片按钮承载小鲸娘扒边探头图标：直边紧贴屏幕物理边缘，悬停时灵动探出 */
+/* 完整按原图比例（660×1024）无裁剪展示整个小鲸娘探头图标，不做偏移遮挡 */
 .dock-tab {
   display: block;
-  width: 60px;
-  height: 108px;
+  width: 90px;
+  height: 140px;
   padding: 0;
   margin: 0;
   border: 0;
   background: transparent;
   cursor: pointer;
   outline: 0;
-  filter: drop-shadow(0 4px 10px rgba(14, 38, 68, 0.28));
-  transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1), filter 0.22s ease;
+  filter: drop-shadow(0 4px 10px rgba(14, 38, 68, 0.25));
+  transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1), filter 0.2s ease;
 }
 
 .dock-icon {
@@ -48,27 +48,23 @@ html, body {
   pointer-events: none;
 }
 
-/* 贴靠右边缘：直边在右，默认微藏 8px，悬停完整探出 */
 .side-right .dock-tab {
-  transform: translateX(8px);
-}
-.side-right .dock-tab:hover {
-  transform: translateX(0);
-  filter: drop-shadow(0 0 12px rgba(96, 185, 255, 0.55)) drop-shadow(0 4px 10px rgba(14, 38, 68, 0.32));
+  transform-origin: right center;
 }
 
-/* 贴靠左边缘：水平镜像翻转使直边贴紧屏幕左侧，小鲸娘向右探头看向桌面 */
+/* 贴靠左边缘时水平镜像，使探头方向朝向桌面内侧，同样完整展示全图 */
+.side-left .dock-tab {
+  transform-origin: left center;
+}
 .side-left .dock-icon {
   transform: scaleX(-1);
 }
-.side-left .dock-tab {
-  transform: translateX(-8px);
-}
-.side-left .dock-tab:hover {
-  transform: translateX(0);
-  filter: drop-shadow(0 0 12px rgba(96, 185, 255, 0.55)) drop-shadow(0 4px 10px rgba(14, 38, 68, 0.32));
+
+.dock-tab:hover {
+  transform: scale(1.04);
+  filter: drop-shadow(0 0 10px rgba(96, 185, 255, 0.5)) drop-shadow(0 4px 10px rgba(14, 38, 68, 0.3));
 }
 
 .dock-tab:active {
-  filter: brightness(0.95);
+  transform: scale(0.98);
 }
