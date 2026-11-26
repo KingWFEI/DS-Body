@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld("__desktopPetBridge", {
   moveToPreset: (preset, options) => ipcRenderer.invoke("pet:move-to-preset", preset, options),
   // 取消当前移动任务。
   stopMovement: () => ipcRenderer.invoke("pet:stop-movement"),
+  // 由渲染进程 requestAnimationFrame 按显示器原生刷新率（如 144Hz/280Hz VSync）推进窗口平滑位移。
+  tickMovement: () => ipcRenderer.send("pet:vsync-tick"),
   // 请求主进程打开独立的对话窗口。
   openChatWindow: () => ipcRenderer.invoke("pet:open-chat-window"),
   // 请求主进程在模型右上角（靠右边缘时自动翻到左上角）显示回答气泡。

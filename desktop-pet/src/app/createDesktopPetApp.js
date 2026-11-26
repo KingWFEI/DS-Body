@@ -126,6 +126,11 @@ export function createDesktopPetApp() {
     if (disposed) return;
     animationFrame = requestAnimationFrame(updateFrame);
 
+    // 按当前显示器原生 VSync（如 144Hz / 280Hz）同步推进窗口位移，消除 60Hz 定时器跨帧跳变重影。
+    if (locomotion.activeMovement) {
+      globalThis.__desktopPetBridge?.tickMovement?.();
+    }
+
     const deltaTime = Math.min(clock.getDelta(), 0.05);
     const state = locomotion.advance(deltaTime);
     handleLocomotionMode(state);
@@ -153,8 +158,7 @@ export function createDesktopPetApp() {
     // 3. 最后更新 VRM 表情、骨骼和弹簧骨。
     vrm?.update(deltaTime);
 
-    const currentState = locomotion.getState();
-    publishMovementState(currentState);
+    publishMovementState(state);
     characterScene.renderer.render(characterScene.scene, characterScene.camera);
   }
 

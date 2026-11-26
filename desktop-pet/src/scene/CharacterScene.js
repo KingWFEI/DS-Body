@@ -4,9 +4,14 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 /** 创建透明渲染场景，并集中管理相机、OrbitControls 和窗口尺寸。 */
 export function createCharacterScene(viewport) {
   const scene = new THREE.Scene();
-  const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+  // 显式请求高性能独显，并按屏幕原生像素比（1:1 物理像素）渲染，避免高分屏非整数缩放导致边缘发糊。
+  const renderer = new THREE.WebGLRenderer({
+    alpha: true,
+    antialias: true,
+    powerPreference: "high-performance",
+  });
   renderer.setClearColor(0x000000, 0);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 3));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   viewport.appendChild(renderer.domElement);
 
@@ -38,6 +43,7 @@ export function createCharacterScene(viewport) {
     camera.top = cameraViewHeight / 2;
     camera.bottom = -cameraViewHeight / 2;
     camera.updateProjectionMatrix();
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 3));
     renderer.setSize(width, height);
   }
 

@@ -5,10 +5,12 @@ function createWindowInteraction(window) {
   let regions = [];
   let ignored = true;
   let dragging = false;
+  let moving = false;
   window.setIgnoreMouseEvents(true);
 
   function refresh() {
-    if (window.isDestroyed() || dragging) return;
+    // 窗口拖拽或程序化平滑移动期间暂停穿透切换，避免途经鼠标指针时触发 DWM 分层表面重建造成卡顿。
+    if (window.isDestroyed() || dragging || moving) return;
     const cursor = screen.getCursorScreenPoint();
     const bounds = window.getContentBounds();
     const x = (cursor.x - bounds.x) / bounds.width;
@@ -32,6 +34,12 @@ function createWindowInteraction(window) {
       regions = nextRegions.filter((region) => region &&
         ['left', 'right', 'top', 'bottom'].every((key) => Number.isFinite(region[key])));
       refresh();
+    },
+    setMoving(nextMoving) {
+      const flag = Boolean(nextMoving);
+      if (moving === flag) return;
+      moving = flag;
+      if (!moving) refresh();
     },
     dispose() { clearInterval(timer); },
   };

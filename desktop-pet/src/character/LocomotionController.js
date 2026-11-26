@@ -203,8 +203,16 @@ export class LocomotionController {
     }
 
     const previous = this.lastSample;
-    if (previous && timestamp > previous.timestamp) {
-      const deltaSeconds = Math.max((timestamp - previous.timestamp) / 1000, 1 / 240);
+    const hasExplicitVelocity =
+      sample.velocity &&
+      Number.isFinite(sample.velocity.x) &&
+      Number.isFinite(sample.velocity.y);
+    if (hasExplicitVelocity) {
+      // 主进程提供连续解析速度时直接采用，避免 240Hz/280Hz 高刷屏下整数像素差分抖动。
+      this.state.velocity.x = sample.velocity.x;
+      this.state.velocity.y = sample.velocity.y;
+    } else if (previous && timestamp > previous.timestamp) {
+      const deltaSeconds = Math.max((timestamp - previous.timestamp) / 1000, 1 / 1000);
       const instantX = (position.x - previous.position.x) / deltaSeconds;
       const instantY = (position.y - previous.position.y) / deltaSeconds;
       const alpha = 1 - Math.exp(-this.config.velocitySmoothing * deltaSeconds);

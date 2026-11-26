@@ -8,6 +8,9 @@ const SPEED_PRESETS = { slow: 180, normal: 300, fast: 500 };
 const PET_WINDOW_BASE_SIZE = { width: 280, height: 480 };
 const BUBBLE_WINDOW_SIZE = { width: 268, height: 168 };
 
+// 在双显卡（核显 + 独显）机器上强制使用高性能独显合成透明 WebGL 窗口，消除跨显卡复制导致的掉帧与拖影。
+app.commandLine.appendSwitch("force_high_performance_gpu");
+
 let petWindow = null;
 let chatWindow = null;
 let bubbleWindow = null;
@@ -113,9 +116,10 @@ function finishMovement(status) {
   if (movementTimer) clearInterval(movementTimer);
   movementTimer = null;
   activeMovement = null;
+  windowInteraction?.setMoving(false);
 
   const position = getPosition();
-  publishMovement(movementTelemetry(movement, status, position));
+  publishMovement(movementTelemetry(movement, status, position, { x: 0, y: 0 }));
   return { stopped: true, status, requestId: movement.requestId, position };
 }
 
@@ -238,65 +242,35 @@ function startMovement(x, y, options = {}) {
 
   const speed = resolveTravelSpeed(distance, options.speed ?? "auto");
   const durationMs = clamp((distance / speed) * 1000, 180, 12000);
+  const deltaX = targetPosition.x - startPosition.x;
+  const deltaY = targetPosition.y - startPosition.y;
+  const unitDirection = { x: deltaX / distance, y: deltaY / distance };
+
   movement.startedAt = performance.now();
   movement.durationMs = durationMs;
+  movement.deltaX = deltaX;
+  movement.deltaY = deltaY;
+  movement.travelSpeed = speed;
+  movement.lastDirection = unitDirection;
+  movement.lastSetX = startPosition.x;
+  movement.lastSetY = startPosition.y;
+  movement.lastTickAt = movement.startedAt;
   activeMovement = movement;
+  windowInteraction?.setMoving(true);
 
-  publishMovement(movementTelemetry(movement, "moving", startPosition));
+  publishMovement(
+    movementTelemetry(movement, "moving", startPosition, {
+      x: unitDirection.x * Math.min(speed * 0.25, 80),
+      y: unitDirection.y * Math.min(speed * 0.25, 80),
+    }),
+  );
 
+  // 兜底定时器：正常情况下由渲染层 VSync (如 144Hz/280Hz) 驱动 stepActiveMovement，
+  // 仅当渲染帧间隔超过 22ms 未触发时才由主进程兜底推进。
   movementTimer = setInterval(() => {
-    if (!petWindow || petWindow.isDestroyed()) {
-      finishMovement("cancelled");
-      return;
-    }
-
-    try {
-      const now = performance.now();
-      const t = clamp((now - movement.startedAt) / movement.durationMs, 0, 1);
-      const ease = t * t * (3 - 2 * t);
-      const requestedX = Math.round(
-        startPosition.x + (targetPosition.x - startPosition.x) * ease,
-      );
-      const requestedY = Math.round(
-        startPosition.y + (targetPosition.y - startPosition.y) * ease,
-      );
-      petWindow.setPosition(requestedX, requestedY);
-
-      const actualBounds = petWindow.getBounds();
-      const position = { x: actualBounds.x, y: actualBounds.y };
-      const dt = Math.max((now - movement.lastSampleTime) / 1000, 1 / 240);
-      const instantX = (position.x - movement.lastSamplePosition.x) / dt;
-      const instantY = (position.y - movement.lastSamplePosition.y) / dt;
-      const blend = 1 - Math.exp(-9 * dt);
-      movement.smoothedVelocity.x +=
-        (instantX - movement.smoothedVelocity.x) * blend;
-      movement.smoothedVelocity.y +=
-        (instantY - movement.smoothedVelocity.y) * blend;
-      const sampleSpeed = Math.hypot(
-        movement.smoothedVelocity.x,
-        movement.smoothedVelocity.y,
-      );
-      if (sampleSpeed >= 24) {
-        movement.lastDirection = {
-          x: movement.smoothedVelocity.x / sampleSpeed,
-          y: movement.smoothedVelocity.y / sampleSpeed,
-        };
-      }
-      movement.lastSampleTime = now;
-      movement.lastSamplePosition = position;
-      publishMovement(
-        movementTelemetry(
-          movement,
-          "moving",
-          position,
-          movement.smoothedVelocity,
-        ),
-      );
-
-      if (t >= 1) finishMovement("arrived");
-    } catch (error) {
-      console.error("桌宠移动失败：", error);
-      finishMovement("error");
+    if (!activeMovement) return;
+    if (performance.now() - activeMovement.lastTickAt >= 22) {
+      stepActiveMovement();
     }
   }, MOVEMENT_INTERVAL_MS);
 
@@ -308,6 +282,57 @@ function startMovement(x, y, options = {}) {
     position: startPosition,
     speed,
   };
+}
+
+/**
+ * 单步推进当前窗口移动（支持由渲染端 requestAnimationFrame 按原生刷新率驱动）：
+ * 1. 仅在整数像素坐标真正改变时才调用 Win32 setPosition，消除高刷屏下的冗余系统调用；
+ * 2. 使用三次平滑曲线的解析导数计算瞬时速度，彻底消除整数像素差分带来的速度抖动和步伐卡顿。
+ */
+function stepActiveMovement() {
+  const movement = activeMovement;
+  if (!movement) return;
+  if (!petWindow || petWindow.isDestroyed()) {
+    finishMovement("cancelled");
+    return;
+  }
+
+  try {
+    const now = performance.now();
+    movement.lastTickAt = now;
+    const t = clamp((now - movement.startedAt) / movement.durationMs, 0, 1);
+    const ease = t * t * (3 - 2 * t);
+    const requestedX = Math.round(movement.startPosition.x + movement.deltaX * ease);
+    const requestedY = Math.round(movement.startPosition.y + movement.deltaY * ease);
+
+    if (requestedX !== movement.lastSetX || requestedY !== movement.lastSetY) {
+      movement.lastSetX = requestedX;
+      movement.lastSetY = requestedY;
+      petWindow.setPosition(requestedX, requestedY, false);
+      if (chatWindow && !chatWindow.isDestroyed() && chatWindow.isVisible()) {
+        positionChatWindow();
+      }
+      if (bubbleWindow && !bubbleWindow.isDestroyed() && bubbleWindow.isVisible()) {
+        positionBubbleWindow();
+      }
+    }
+
+    const durationSec = movement.durationMs / 1000;
+    // smoothstep 导数 6*t*(1-t)，首尾保留微弱初速度让起步转身更果断顺滑
+    const derivativeFactor = Math.max(6 * t * (1 - t), t < 0.96 ? 0.2 : 0);
+    const velocity = {
+      x: (movement.deltaX / durationSec) * derivativeFactor,
+      y: (movement.deltaY / durationSec) * derivativeFactor,
+    };
+
+    const position = { x: movement.lastSetX, y: movement.lastSetY };
+    publishMovement(movementTelemetry(movement, "moving", position, velocity));
+
+    if (t >= 1) finishMovement("arrived");
+  } catch (error) {
+    console.error("桌宠移动失败：", error);
+    finishMovement("error");
+  }
 }
 
 function moveToScreen(x, y, options = {}) {
@@ -383,11 +408,14 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
+      backgroundThrottling: false,
     },
   });
   windowInteraction = createWindowInteraction(petWindow);
   petWindow.on("will-move", stopMovement);
-  petWindow.on("moved", publishIdlePosition);
+  petWindow.on("moved", () => {
+    if (!activeMovement) publishIdlePosition();
+  });
 
   petWindow.loadURL("http://127.0.0.1:5173");
   petWindow.webContents.on("did-fail-load", (_event, code, description) => {
@@ -397,6 +425,7 @@ function createWindow() {
     publishIdlePosition();
   });
   petWindow.on("move", () => {
+    if (activeMovement) return;
     scheduleChatWindowPosition();
     scheduleBubbleWindowPosition();
   });
@@ -656,6 +685,10 @@ app.whenReady().then(() => {
   ipcMain.handle("pet:stop-movement", (event) => {
     assertOwner(event);
     return stopMovement();
+  });
+  ipcMain.on("pet:vsync-tick", (event) => {
+    if (!petWindow || event.sender !== petWindow.webContents) return;
+    stepActiveMovement();
   });
   ipcMain.handle("pet:open-chat-window", (event) => {
     assertOwner(event);
