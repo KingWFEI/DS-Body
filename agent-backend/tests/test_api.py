@@ -34,13 +34,17 @@ class ScriptedFakeLLM:
 
 
 def test_health_and_clear_endpoints() -> None:
-    """验证健康检查包含 langgraph+sqlite 引擎标识，且清空会话接口在生命周期内正常工作。"""
+    """验证健康检查、SQLite 历史查询接口与清空会话接口正常工作。"""
     with TestClient(app) as client:
         health = client.get("/health")
         assert health.status_code == 200
         payload = health.json()
         assert payload["status"] == "ok"
         assert payload["engine"] == "langgraph+sqlite"
+
+        history_res = client.get("/api/v1/chat/history", params={"session_id": "api-clear-test"})
+        assert history_res.status_code == 200
+        assert history_res.json()["session_id"] == "api-clear-test"
 
         clear_res = client.post("/api/v1/chat/clear", json={"session_id": "api-clear-test"})
         assert clear_res.status_code == 200
@@ -148,9 +152,18 @@ async def test_langgraph_tool_loop_and_sqlite_persistence_across_restarts(tmp_pa
         ]
 
         res_2 = await service_2.chat(
-            ChatRequest(message="你还记得刚才做了什么吗？", session_id="persist-thread")
+            ChatRequest(message="你还记得刚才做了什么吗？", session_id="persist-thread", source="voice")
         )
         assert res_2.reply == "当然记得呀，刚才帮你看过时间呢！"
+
+        # 验证 SQLite chat_messages 明细表完整持久化了文字/语音来源、动作与时间戳
+        detailed_items = await service_2.get_chat_history_items("persist-thread")
+        assert len(detailed_items) == 4
+        assert detailed_items[0].source == "text"
+        assert detailed_items[1].motion == "attention/wave hand 1"
+        assert detailed_items[2].source == "voice"
+        assert detailed_items[3].expression == "happy"
+        assert len(detailed_items[0].created_at) == 19
 
         # 检查发给大模型的提示词中是否继承了上一轮的 relaxed 心情，且所有 tool_calls 均有配对 ToolMessage
         sent_messages = llm_round_2.recorded_calls[0]

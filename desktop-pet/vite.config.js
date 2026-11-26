@@ -17,8 +17,8 @@ export default defineConfig({
     rolldownOptions: {
       input: {
         index: resolve(projectRoot, 'index.html'),
-        chat: resolve(projectRoot, 'chat.html'),
         bubble: resolve(projectRoot, 'bubble.html'),
+        history: resolve(projectRoot, 'history.html'),
       },
     },
   },

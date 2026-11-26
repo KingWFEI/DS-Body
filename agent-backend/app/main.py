@@ -12,11 +12,12 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 import logging
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.schemas import (
+    ChatHistoryResponse,
     ChatRequest,
     ChatResponse,
     ClearSessionRequest,
@@ -118,6 +119,7 @@ async def voice_chat(
         ChatRequest(
             message=recognized_text,
             session_id=session_id,
+            source="voice",
         )
     )
     return VoiceChatResponse(
@@ -126,6 +128,20 @@ async def voice_chat(
         reply=chat_result.reply,
         action=chat_result.action,
         using_mock=chat_result.using_mock,
+    )
+
+
+@app.get("/api/v1/chat/history", response_model=ChatHistoryResponse, summary="查询 SQLite 历史聊天记录")
+async def get_chat_history(
+    session_id: str = Query(default="default", min_length=1, max_length=64, description="会话 ID"),
+    limit: int = Query(default=200, ge=1, le=1000, description="最多返回的历史消息条数"),
+) -> ChatHistoryResponse:
+    """从本地 SQLite `chat_messages` 表查询指定会话的历史问答明细（含语音/文字标识与时间戳）。"""
+    items = await agent_service.get_chat_history_items(session_id=session_id, limit=limit)
+    return ChatHistoryResponse(
+        session_id=session_id,
+        total=len(items),
+        items=items,
     )
 
 

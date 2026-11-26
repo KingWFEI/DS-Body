@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>小鲸娘 · 历史聊天对话</title>
+    <link rel="stylesheet" href="/src/history.css" />
+  </head>
+  <body>
+    <main class="history-window">
+      <header class="history-header">
+        <div class="avatar" aria-hidden="true">🐳</div>
+        <div class="header-info">
+          <h1>历史聊天对话</h1>
+          <p id="historySummary" class="summary-text">正在从 SQLite 读取记录…</p>
+        </div>
+        <div class="header-actions">
+          <button id="refreshBtn" class="tool-btn" type="button" title="刷新记录">刷新</button>
+          <button id="clearHistoryBtn" class="tool-btn danger" type="button" title="清空 SQLite 中的历史记录">清空</button>
+        </div>
+      </header>
+
+      <section id="historyList" class="history-list" aria-label="历史聊天列表"></section>
+    </main>
+    <script type="module" src="/src/history.js"></script>
+  </body>
+</html>

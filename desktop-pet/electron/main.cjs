@@ -12,11 +12,10 @@ const BUBBLE_WINDOW_SIZE = { width: 268, height: 168 };
 app.commandLine.appendSwitch("force_high_performance_gpu");
 
 let petWindow = null;
-let chatWindow = null;
+let historyWindow = null;
 let bubbleWindow = null;
 let bubbleReadyPromise = null;
 let currentBubbleSide = "right";
-let chatPositionTimer = null;
 let bubblePositionTimer = null;
 let movementTimer = null;
 let activeMovement = null;
@@ -309,9 +308,6 @@ function stepActiveMovement() {
       movement.lastSetX = requestedX;
       movement.lastSetY = requestedY;
       petWindow.setPosition(requestedX, requestedY, false);
-      if (chatWindow && !chatWindow.isDestroyed() && chatWindow.isVisible()) {
-        positionChatWindow();
-      }
       if (bubbleWindow && !bubbleWindow.isDestroyed() && bubbleWindow.isVisible()) {
         positionBubbleWindow();
       }
@@ -426,115 +422,30 @@ function createWindow() {
   });
   petWindow.on("move", () => {
     if (activeMovement) return;
-    scheduleChatWindowPosition();
     scheduleBubbleWindowPosition();
   });
   petWindow.on("resize", () => {
-    scheduleChatWindowPosition();
     scheduleBubbleWindowPosition();
   });
   petWindow.on("closed", () => {
     if (movementTimer) clearInterval(movementTimer);
     windowInteraction?.dispose();
     windowInteraction = null;
-    if (chatPositionTimer) clearTimeout(chatPositionTimer);
     if (bubblePositionTimer) clearTimeout(bubblePositionTimer);
     if (bubbleWindow && !bubbleWindow.isDestroyed()) {
       bubbleWindow.destroy();
     }
+    if (historyWindow && !historyWindow.isDestroyed()) {
+      historyWindow.destroy();
+    }
     bubbleWindow = null;
+    historyWindow = null;
     bubbleReadyPromise = null;
     movementTimer = null;
-    chatPositionTimer = null;
     bubblePositionTimer = null;
     activeMovement = null;
     petWindow = null;
   });
-}
-
-function positionChatWindow() {
-  if (
-    !petWindow ||
-    petWindow.isDestroyed() ||
-    !chatWindow ||
-    chatWindow.isDestroyed()
-  )
-    return;
-
-  const petBounds = petWindow.getBounds();
-  const workArea = screen.getDisplayMatching(petBounds).workArea;
-  const chatBounds = chatWindow.getBounds();
-  const gap = 12;
-  const leftX = petBounds.x - chatBounds.width - gap;
-  const rightX = petBounds.x + petBounds.width + gap;
-  const rightEdge = workArea.x + workArea.width;
-  let x;
-
-  // 优先放在模型左侧；左侧空间不足时放到右侧，保持两个窗口不重叠。
-  if (leftX >= workArea.x) x = leftX;
-  else if (rightX + chatBounds.width <= rightEdge) x = rightX;
-  else {
-    const leftSpace = petBounds.x - workArea.x - gap;
-    const rightSpace = rightEdge - petBounds.x - petBounds.width - gap;
-    x =
-      leftSpace >= rightSpace
-        ? petBounds.x - chatBounds.width - gap
-        : petBounds.x + petBounds.width + gap;
-  }
-
-  const y = Math.max(
-    workArea.y + gap,
-    Math.min(
-      petBounds.y + Math.round((petBounds.height - chatBounds.height) / 2),
-      workArea.y + workArea.height - chatBounds.height - gap,
-    ),
-  );
-  chatWindow.setPosition(x, y, false);
-}
-
-function scheduleChatWindowPosition() {
-  if (!chatWindow || chatWindow.isDestroyed() || chatPositionTimer) return;
-  chatPositionTimer = setTimeout(() => {
-    chatPositionTimer = null;
-    positionChatWindow();
-  }, 32);
-}
-
-function openChatWindow() {
-  if (!petWindow || petWindow.isDestroyed()) throw new Error("桌宠窗口不可用");
-
-  if (chatWindow && !chatWindow.isDestroyed()) {
-    positionChatWindow();
-    if (chatWindow.isMinimized()) chatWindow.restore();
-    chatWindow.show();
-    chatWindow.focus();
-    return { opened: true, reused: true };
-  }
-
-  chatWindow = new BrowserWindow({
-    width: 340,
-    height: 480,
-    title: "小鲸娘对话",
-    parent: petWindow,
-    show: false,
-    resizable: false,
-    backgroundColor: "#f4f7fb",
-    webPreferences: {
-      preload: path.join(__dirname, "chat-preload.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
-  chatWindow.once("ready-to-show", () => {
-    positionChatWindow();
-    chatWindow?.show();
-  });
-  chatWindow.on("closed", () => {
-    chatWindow = null;
-  });
-  void chatWindow.loadURL("http://127.0.0.1:5173/chat.html");
-  return { opened: true, reused: false };
 }
 
 /**
@@ -653,10 +564,61 @@ async function showSpeechBubble(payload) {
   return { shown: true, side };
 }
 
+/** 在桌宠不重叠的一侧打开独立历史聊天记录窗口（不挂载 parent 以免拖累透明主窗口 DWM 移动帧率）。 */
+function openHistoryWindow() {
+  if (!petWindow || petWindow.isDestroyed()) throw new Error("桌宠窗口不可用");
+
+  const winWidth = 360;
+  const winHeight = 490;
+  const petBounds = petWindow.getBounds();
+  const workArea = screen.getDisplayMatching(petBounds).workArea;
+  const gap = 14;
+  const leftX = petBounds.x - winWidth - gap;
+  const rightX = petBounds.x + petBounds.width + gap;
+  const x = leftX >= workArea.x
+    ? leftX
+    : Math.min(rightX, workArea.x + workArea.width - winWidth - gap);
+  const y = clamp(
+    petBounds.y + Math.round((petBounds.height - winHeight) / 2),
+    workArea.y + gap,
+    workArea.y + workArea.height - winHeight - gap,
+  );
+
+  if (historyWindow && !historyWindow.isDestroyed()) {
+    if (historyWindow.isMinimized()) historyWindow.restore();
+    historyWindow.setPosition(Math.round(x), Math.round(y), false);
+    historyWindow.show();
+    historyWindow.focus();
+    return { opened: true, reused: true };
+  }
+
+  historyWindow = new BrowserWindow({
+    width: winWidth,
+    height: winHeight,
+    x: Math.round(x),
+    y: Math.round(y),
+    title: "小鲸娘 · 历史聊天对话",
+    autoHideMenuBar: true,
+    show: false,
+    backgroundColor: "#f4f7fb",
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  historyWindow.once("ready-to-show", () => {
+    historyWindow?.show();
+  });
+  historyWindow.on("closed", () => {
+    historyWindow = null;
+  });
+  void historyWindow.loadURL("http://127.0.0.1:5173/history.html");
+  return { opened: true, reused: false };
+}
+
 function isTrustedSender(event) {
-  const isFromChat = chatWindow && !chatWindow.isDestroyed() && event.sender === chatWindow.webContents;
-  const isFromPet = petWindow && !petWindow.isDestroyed() && event.sender === petWindow.webContents;
-  return Boolean(isFromChat || isFromPet);
+  return Boolean(petWindow && !petWindow.isDestroyed() && event.sender === petWindow.webContents);
 }
 
 function assertOwner(event) {
@@ -690,9 +652,24 @@ app.whenReady().then(() => {
     if (!petWindow || event.sender !== petWindow.webContents) return;
     stepActiveMovement();
   });
-  ipcMain.handle("pet:open-chat-window", (event) => {
+  ipcMain.handle("pet:set-always-on-top", (event, flag) => {
     assertOwner(event);
-    return openChatWindow();
+    if (!petWindow || petWindow.isDestroyed()) return { alwaysOnTop: true };
+    const nextFlag = Boolean(flag);
+    petWindow.setAlwaysOnTop(nextFlag);
+    if (bubbleWindow && !bubbleWindow.isDestroyed()) {
+      bubbleWindow.setAlwaysOnTop(nextFlag);
+    }
+    return { alwaysOnTop: petWindow.isAlwaysOnTop() };
+  });
+  ipcMain.handle("pet:get-always-on-top", (event) => {
+    assertOwner(event);
+    if (!petWindow || petWindow.isDestroyed()) return { alwaysOnTop: true };
+    return { alwaysOnTop: petWindow.isAlwaysOnTop() };
+  });
+  ipcMain.handle("pet:open-history-window", (event) => {
+    assertOwner(event);
+    return openHistoryWindow();
   });
   ipcMain.handle("pet:show-speech-bubble", (event, payload) => {
     if (!isTrustedSender(event)) {
@@ -705,13 +682,7 @@ app.whenReady().then(() => {
       bubbleWindow.hide();
     }
   });
-  ipcMain.on("pet:sync-chat-entry", (event, entry) => {
-    if (!petWindow || event.sender !== petWindow.webContents) return;
-    if (chatWindow && !chatWindow.isDestroyed() && !chatWindow.webContents.isDestroyed()) {
-      chatWindow.webContents.send("pet:chat-sync", entry);
-    }
-  });
-  // 接收来自对话窗口（或主窗口）的智能体动作指令，并转发给 3D 桌宠渲染进程执行。
+  // 接收智能体动作指令并转发给 3D 桌宠渲染进程执行。
   ipcMain.handle("pet:dispatch-agent-action", (event, action) => {
     if (!isTrustedSender(event)) {
       throw new Error("无权向桌宠发送智能体动作指令");

@@ -9,18 +9,18 @@
 """
 
 import asyncio
+from datetime import datetime
 import logging
 from typing import Any
 
 import aiosqlite
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 import openai
 
 from app.config import Settings, settings as default_settings
-from app.graph.tools import SUBMIT_REPLY_TOOL_NAME
 from app.graph.workflow import build_pet_graph
-from app.schemas import ChatRequest, ChatResponse, PetAction
+from app.schemas import ChatHistoryItem, ChatRequest, ChatResponse, PetAction
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +80,30 @@ class AgentService:
                 await self._conn.execute("PRAGMA journal_mode=WAL;")
             self._checkpointer = AsyncSqliteSaver(self._conn)
             await self._checkpointer.setup()
+
+            # 创建业务级历史聊天对话明细表，持久化每条问答的内容、输入方式（文字/语音）、动作与时间戳
+            await self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'text',
+                    motion TEXT,
+                    expression TEXT,
+                    created_at TEXT NOT NULL
+                );
+                """
+            )
+            await self._conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id
+                ON chat_messages (session_id, id);
+                """
+            )
+            await self._conn.commit()
+
             self._graph = build_pet_graph(
                 config=self.settings,
                 checkpointer=self._checkpointer,
@@ -102,15 +126,25 @@ class AgentService:
                 self._bound_loop = None
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
-        """执行一轮桌宠对话：写入用户消息 -> 运行 LangGraph -> 持久化状态 -> 返回回复与动作。"""
+        """执行一轮桌宠对话：写入用户消息 -> 运行 LangGraph -> SQLite 双写入库 -> 返回回复与动作。"""
         user_text = request.message.strip()
         session_id = request.session_id
-
-        # 未配置真实密钥且无测试替身时，走本地零配置演示模式
-        if not self.settings.has_valid_api_key and self._llm_override is None:
-            return self._build_placeholder_response(session_id=session_id, user_text=user_text)
+        source = request.source
 
         await self.initialize()
+
+        # 未配置真实密钥且无测试替身时，走本地零配置演示模式，同样将对话记录写入 SQLite 历史表
+        if not self.settings.has_valid_api_key and self._llm_override is None:
+            demo_res = self._build_placeholder_response(session_id=session_id, user_text=user_text)
+            await self._save_turn_to_sqlite(
+                session_id=session_id,
+                user_text=user_text,
+                reply_text=demo_res.reply,
+                source=source,
+                action=demo_res.action,
+            )
+            return demo_res
+
         assert self._graph is not None
 
         runnable_config = {"configurable": {"thread_id": session_id}}
@@ -159,6 +193,15 @@ class AgentService:
         raw_action = final_state.get("final_action")
         pet_action = PetAction.model_validate(raw_action) if isinstance(raw_action, dict) else None
 
+        # 将本轮用户消息与小鲸娘回复正式写入 SQLite `chat_messages` 历史记录表
+        await self._save_turn_to_sqlite(
+            session_id=session_id,
+            user_text=user_text,
+            reply_text=reply_text,
+            source=source,
+            action=pet_action,
+        )
+
         return ChatResponse(
             session_id=session_id,
             reply=reply_text,
@@ -166,44 +209,94 @@ class AgentService:
             using_mock=False,
         )
 
+    async def _save_turn_to_sqlite(
+        self,
+        session_id: str,
+        user_text: str,
+        reply_text: str,
+        source: str,
+        action: PetAction | None,
+    ) -> None:
+        """将一问一答原子写入 SQLite `chat_messages` 明细表。"""
+        if self._conn is None:
+            return
+        now_str = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        await self._conn.executemany(
+            """
+            INSERT INTO chat_messages (session_id, role, content, source, motion, expression, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+            """,
+            [
+                (session_id, "user", user_text, source, None, None, now_str),
+                (
+                    session_id,
+                    "assistant",
+                    reply_text,
+                    source,
+                    action.motion if action else None,
+                    action.expression if action else None,
+                    now_str,
+                ),
+            ],
+        )
+        await self._conn.commit()
+
     async def clear_session(self, session_id: str) -> bool:
-        """从本地 SQLite 数据库中彻底删除指定 `session_id` 的历史对话与状态检查点。"""
+        """从本地 SQLite 数据库中彻底删除指定 `session_id` 的 LangGraph 检查点与历史聊天记录表数据。"""
         await self.initialize()
-        if self._checkpointer is None:
+        if self._checkpointer is None or self._conn is None:
             return False
         await self._checkpointer.adelete_thread(session_id)
+        await self._conn.execute("DELETE FROM chat_messages WHERE session_id = ?;", (session_id,))
+        await self._conn.commit()
         return True
 
-    async def get_history(self, session_id: str) -> list[dict[str, str]]:
-        """
-        从 SQLite Checkpointer 读取指定会话已保存的对话历史摘要（仅提取用户与小鲸娘的对话轮次），
-        方便调试与单元测试验证持久化效果。
-        """
+    async def get_chat_history_items(
+        self,
+        session_id: str,
+        limit: int = 200,
+    ) -> list[ChatHistoryItem]:
+        """从 SQLite `chat_messages` 表按时间顺序读取最近的 `limit` 条历史对话记录。"""
         await self.initialize()
-        if self._graph is None:
+        if self._conn is None:
             return []
 
-        snapshot = await self._graph.aget_state({"configurable": {"thread_id": session_id}})
-        if not snapshot or not snapshot.values:
-            return []
+        safe_limit = max(1, min(limit, 1000))
+        cursor = await self._conn.execute(
+            """
+            SELECT id, session_id, role, content, source, motion, expression, created_at
+            FROM (
+                SELECT id, session_id, role, content, source, motion, expression, created_at
+                FROM chat_messages
+                WHERE session_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+            )
+            ORDER BY id ASC;
+            """,
+            (session_id, safe_limit),
+        )
+        rows = await cursor.fetchall()
+        await cursor.close()
 
-        turns: list[dict[str, str]] = []
-        for msg in snapshot.values.get("messages", []):
-            if isinstance(msg, HumanMessage):
-                turns.append({"role": "user", "content": str(msg.content)})
-            elif isinstance(msg, AIMessage):
-                # 提取通过 submit_pet_reply 工具发送的回复或直接文本回复
-                extracted_reply = ""
-                if msg.tool_calls:
-                    for call in msg.tool_calls:
-                        if call.get("name") == SUBMIT_REPLY_TOOL_NAME:
-                            extracted_reply = str((call.get("args") or {}).get("reply") or "").strip()
-                elif isinstance(msg.content, str) and msg.content.strip():
-                    extracted_reply = msg.content.strip()
+        return [
+            ChatHistoryItem(
+                id=row[0],
+                session_id=row[1],
+                role=row[2],
+                content=row[3],
+                source=row[4] if row[4] in ("text", "voice") else "text",
+                motion=row[5],
+                expression=row[6],
+                created_at=row[7],
+            )
+            for row in rows
+        ]
 
-                if extracted_reply:
-                    turns.append({"role": "assistant", "content": extracted_reply})
-        return turns
+    async def get_history(self, session_id: str) -> list[dict[str, str]]:
+        """获取简化的 `[{"role": ..., "content": ...}]` 历史对话列表，供快速调试与单元测试断言。"""
+        items = await self.get_chat_history_items(session_id=session_id)
+        return [{"role": item.role, "content": item.content} for item in items]
 
     def _build_api_error_response(self, session_id: str, status_code: int) -> ChatResponse:
         """将常见 HTTP 错误码转换为直观的中文排障提示。"""

@@ -112,12 +112,30 @@ export function createCharacterApi({
     return modelScaleController.setScale(scale);
   }
 
-  /** 在模型窗口旁打开独立的对话窗口，避免遮挡 3D 模型。 */
-  function openChatWindow() {
-    if (typeof movementBridge?.openChatWindow !== "function") {
-      return Promise.reject(new Error("对话窗口需要 Electron 环境"));
+  /** 设置桌宠窗口是否始终置顶（浏览器预览环境下降级返回目标布尔值）。 */
+  async function setAlwaysOnTop(flag) {
+    const nextFlag = Boolean(flag);
+    if (typeof movementBridge?.setAlwaysOnTop !== "function") {
+      return { alwaysOnTop: nextFlag };
     }
-    return movementBridge.openChatWindow();
+    return movementBridge.setAlwaysOnTop(nextFlag);
+  }
+
+  /** 读取桌宠窗口当前是否处于始终置顶状态。 */
+  async function getAlwaysOnTop() {
+    if (typeof movementBridge?.getAlwaysOnTop !== "function") {
+      return { alwaysOnTop: true };
+    }
+    return movementBridge.getAlwaysOnTop();
+  }
+
+  /** 打开独立的历史聊天记录面板（从后端 SQLite 加载持久化记录）。 */
+  function openHistoryWindow() {
+    if (typeof movementBridge?.openHistoryWindow !== "function") {
+      window.open("/history.html", "_blank", "width=360,height=490");
+      return Promise.resolve({ opened: true, browserFallback: true });
+    }
+    return movementBridge.openHistoryWindow();
   }
 
   /** 在模型头部右上角（靠屏幕右边缘时自动翻到左上角）显示透明回答气泡。 */
@@ -262,7 +280,9 @@ export function createCharacterApi({
     moveToScreen,
     moveToPreset,
     stopMovement,
-    openChatWindow,
+    setAlwaysOnTop,
+    getAlwaysOnTop,
+    openHistoryWindow,
     showSpeechBubble,
     applyAgentAction,
     setModelScale,

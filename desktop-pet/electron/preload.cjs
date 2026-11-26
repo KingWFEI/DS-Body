@@ -10,12 +10,13 @@ contextBridge.exposeInMainWorld("__desktopPetBridge", {
   stopMovement: () => ipcRenderer.invoke("pet:stop-movement"),
   // 由渲染进程 requestAnimationFrame 按显示器原生刷新率（如 144Hz/280Hz VSync）推进窗口平滑位移。
   tickMovement: () => ipcRenderer.send("pet:vsync-tick"),
-  // 请求主进程打开独立的对话窗口。
-  openChatWindow: () => ipcRenderer.invoke("pet:open-chat-window"),
-  // 请求主进程在模型右上角（靠右边缘时自动翻到左上角）显示回答气泡。
+  // 设置或读取桌宠窗口“始终置顶”状态。
+  setAlwaysOnTop: (flag) => ipcRenderer.invoke("pet:set-always-on-top", Boolean(flag)),
+  getAlwaysOnTop: () => ipcRenderer.invoke("pet:get-always-on-top"),
+  // 打开独立的历史聊天记录查看窗口（读取后端 SQLite 持久化记录）。
+  openHistoryWindow: () => ipcRenderer.invoke("pet:open-history-window"),
+  // 请求主进程在模型右上角（靠右边缘时自动翻到左上角）显示透明回答气泡。
   showSpeechBubble: (payload) => ipcRenderer.invoke("pet:show-speech-bubble", payload),
-  // 将主窗口语音对话产生的问答同步给已打开的文字聊天窗口。
-  syncVoiceChatToWindow: (entry) => ipcRenderer.send("pet:sync-chat-entry", entry),
   // 仅在布局变化时上报模型与控件矩形；主进程独立处理穿透。
   setInteractionRegions: (regions) => ipcRenderer.send("pet:set-interaction-regions", regions),
   // 根据模型缩放比例同步调整桌宠窗口尺寸。
@@ -27,7 +28,7 @@ contextBridge.exposeInMainWorld("__desktopPetBridge", {
     ipcRenderer.on("pet:movement-state", listener);
     return () => ipcRenderer.removeListener("pet:movement-state", listener);
   },
-  // 订阅来自独立对话窗口转发的智能体角色控制指令（动作、表情、预设移动）。
+  // 订阅智能体角色控制指令（动作、表情、预设移动）。
   onAgentAction: (callback) => {
     if (typeof callback !== "function") return () => {};
     const listener = (_event, action) => callback(action);

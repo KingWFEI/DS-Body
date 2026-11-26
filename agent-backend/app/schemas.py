@@ -56,7 +56,7 @@ class PetAction(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    """来自桌宠对话窗口的聊天请求体。"""
+    """来自桌宠客户端的聊天请求体。"""
 
     message: str = Field(
         ...,
@@ -68,7 +68,11 @@ class ChatRequest(BaseModel):
         default="default",
         min_length=1,
         max_length=64,
-        description="会话唯一标识（对应 LangGraph 的 thread_id，持久化存储在本地 SQLite 中）",
+        description="会话唯一标识（对应 LangGraph thread_id 与 SQLite 历史记录分区键）",
+    )
+    source: Literal["text", "voice"] = Field(
+        default="text",
+        description="消息输入来源：'text' 为底部单行文字输入，'voice' 为麦克风语音输入",
     )
     pet_state: dict[str, Any] | None = Field(
         default=None,
@@ -110,7 +114,28 @@ class ClearSessionResponse(BaseModel):
     """清空会话历史的响应结果。"""
 
     session_id: str = Field(description="已清空的会话 ID")
-    cleared: bool = Field(description="是否成功从本地 SQLite 清理该会话记忆")
+    cleared: bool = Field(description="是否成功从本地 SQLite 清理该会话记忆与历史记录")
+
+
+class ChatHistoryItem(BaseModel):
+    """存储在本地 SQLite `chat_messages` 表中的单条历史聊天记录。"""
+
+    id: int = Field(description="数据库自增主键 ID")
+    session_id: str = Field(description="所属会话 ID")
+    role: Literal["user", "assistant"] = Field(description="发言角色：user 为主人，assistant 为小鲸娘")
+    content: str = Field(description="消息文本内容")
+    source: Literal["text", "voice"] = Field(default="text", description="消息来源：文字或语音")
+    motion: str | None = Field(default=None, description="伴随执行的动作路径（仅 assistant）")
+    expression: str | None = Field(default=None, description="伴随执行的表情名称（仅 assistant）")
+    created_at: str = Field(description="本地入库时间（YYYY-MM-DD HH:MM:SS）")
+
+
+class ChatHistoryResponse(BaseModel):
+    """指定会话的历史聊天记录列表响应。"""
+
+    session_id: str = Field(description="当前查询的会话 ID")
+    total: int = Field(description="返回的记录条数")
+    items: list[ChatHistoryItem] = Field(default_factory=list, description="按时间升序排列的历史消息列表")
 
 
 class HealthResponse(BaseModel):

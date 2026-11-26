@@ -17,6 +17,10 @@ import {
 } from "../utils/wavEncoder.js";
 
 const API_BASE_URL = (import.meta.env.VITE_AGENT_API_BASE || "http://127.0.0.1:8000").replace(/\/+$/, "");
+const historyChannel =
+  typeof globalThis.BroadcastChannel === "function"
+    ? new globalThis.BroadcastChannel("ds-body:history-updated")
+    : null;
 
 // 语音检测阈值与时间参数
 const SPEECH_START_RMS = 0.02; // 判定开始说话的音量均方根阈值
@@ -313,15 +317,8 @@ export function createVoiceInputController({
       if (data.action) {
         await character.applyAgentAction(data.action);
       }
-
-      // 3. 若文字聊天窗口正打开着，同步追加这条语音对话记录
       if (recognizedText) {
-        globalThis.__desktopPetBridge?.syncVoiceChatToWindow?.({
-          userText: recognizedText,
-          reply: replyText,
-          action: data.action,
-          usingMock: Boolean(data.using_mock),
-        });
+        historyChannel?.postMessage({ type: "updated" });
       }
 
       setStatus(recognizedText ? `语音识别：「${recognizedText}」` : "未识别到清晰语音");
