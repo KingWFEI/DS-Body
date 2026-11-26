@@ -12,7 +12,7 @@ const WINDOW_MARGIN = 16;
 const SPEED_PRESETS = { slow: 180, normal: 300, fast: 500 };
 const PET_WINDOW_BASE_SIZE = { width: 280, height: 480 };
 const BUBBLE_WINDOW_SIZE = { width: 268, height: 168 };
-const DOCK_WINDOW_SIZE = { width: 58, height: 68 };
+const DOCK_WINDOW_SIZE = { width: 72, height: 120 };
 
 // 在双显卡（核显 + 独显）机器上强制使用高性能独显合成透明 WebGL 窗口，消除跨显卡复制导致的掉帧与拖影。
 app.commandLine.appendSwitch("force_high_performance_gpu");
