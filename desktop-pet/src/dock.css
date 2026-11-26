@@ -25,11 +25,11 @@ html, body {
   justify-content: flex-end;
 }
 
-/* 完整按原图比例（660×1024）无裁剪展示整个小鲸娘探头图标，不做偏移遮挡 */
+/* 完整展示原 12 帧透明动态 GIF 内容；抵消原画布右侧纯透明空白区使扒边直边紧贴屏幕边缘 */
 .dock-tab {
-  display: block;
-  width: 90px;
-  height: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 0;
   margin: 0;
   border: 0;
@@ -42,8 +42,8 @@ html, body {
 
 .dock-icon {
   display: block;
-  width: 100%;
-  height: 100%;
+  width: 140px;
+  height: 140px;
   object-fit: contain;
   pointer-events: none;
 }
@@ -51,13 +51,17 @@ html, body {
 .side-right .dock-tab {
   transform-origin: right center;
 }
+.side-right .dock-icon {
+  margin-right: -20px;
+}
 
-/* 贴靠左边缘时水平镜像，使探头方向朝向桌面内侧，同样完整展示全图 */
+/* 贴靠左边缘时水平镜像，使探头朝向桌面内侧且直边紧贴屏幕左缘 */
 .side-left .dock-tab {
   transform-origin: left center;
 }
 .side-left .dock-icon {
   transform: scaleX(-1);
+  margin-left: -20px;
 }
 
 .dock-tab:hover {
