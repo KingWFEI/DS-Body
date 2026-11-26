@@ -1,5 +1,6 @@
 import { createWindowInteraction } from "./WindowInteraction.js";
 import { DEFAULT_MOTION } from "../animation/motionCatalog.js";
+import { createVoiceInputController } from "../voice/VoiceInputController.js";
 
 /** 创建动作调试面板，并将所有操作路由到统一的 window.character 接口。 */
 export function createDebugPanel({ motionOptions }) {
@@ -43,9 +44,26 @@ export function createDebugPanel({ motionOptions }) {
       <div id="status">正在准备场景…</div>
       <pre id="movementDebug"></pre>
     </aside>
+    <div id="voiceWaveCapsule" class="voice-capsule" data-mouse-interactive hidden aria-live="polite">
+      <span class="voice-dot" aria-hidden="true"></span>
+      <div class="wave-bars" aria-hidden="true">
+        <span class="wave-bar"></span>
+        <span class="wave-bar"></span>
+        <span class="wave-bar"></span>
+        <span class="wave-bar"></span>
+        <span class="wave-bar"></span>
+        <span class="wave-bar"></span>
+        <span class="wave-bar"></span>
+        <span class="wave-bar"></span>
+        <span class="wave-bar"></span>
+      </div>
+      <span id="voiceStateLabel" class="voice-label">请说话…</span>
+      <button id="cancelVoice" class="voice-cancel" type="button" aria-label="取消语音输入" title="取消">✕</button>
+    </div>
     <nav id="controlRail" data-mouse-interactive aria-label="桌宠快捷操作">
       <button id="toggleDebug" class="rail-button" type="button" aria-label="打开调试窗口" aria-expanded="false" title="调试窗口">⚙</button>
       <button id="openChat" class="rail-button" type="button" aria-label="打开对话窗口" title="对话">💬</button>
+      <button id="toggleVoice" class="rail-button" type="button" aria-label="开启语音输入" aria-pressed="false" title="语音对话">🎙️</button>
     </nav>
   `;
 
@@ -119,6 +137,17 @@ export function createDebugPanel({ motionOptions }) {
       void character.openChatWindow().catch((error) => setStatus(`打开对话窗口失败：${error.message}`));
     });
 
+    const voiceController = createVoiceInputController({
+      voiceButton: app.querySelector("#toggleVoice"),
+      capsuleElement: app.querySelector("#voiceWaveCapsule"),
+      waveBars: [...app.querySelectorAll("#voiceWaveCapsule .wave-bar")],
+      labelElement: app.querySelector("#voiceStateLabel"),
+      cancelButton: app.querySelector("#cancelVoice"),
+      character,
+      onLayoutChanged: () => interaction.refresh(),
+      setStatus,
+    });
+
     const scaleValue = app.querySelector("#scaleValue");
     const updateScale = (scale) => { scaleValue.value = `${Math.round(scale * 100)}%`; };
     app.querySelector("#scaleDown").addEventListener("click", () => {
@@ -168,6 +197,7 @@ export function createDebugPanel({ motionOptions }) {
       unsubscribeMovement();
       unsubscribeMotion();
       unsubscribeScale();
+      voiceController.dispose();
       interaction.dispose();
     };
   }

@@ -18,6 +18,7 @@ export default defineConfig({
       input: {
         index: resolve(projectRoot, 'index.html'),
         chat: resolve(projectRoot, 'chat.html'),
+        bubble: resolve(projectRoot, 'bubble.html'),
       },
     },
   },

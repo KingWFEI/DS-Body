@@ -1,13 +1,13 @@
 # DS-Body
 
-**DS-Body** 是桌面 3D 宠物与 **LangGraph + DeepSeek** 智能体后端的一体化仓库，包含两个子项目：
+**DS-Body** 是桌面 3D 宠物与 **LangGraph + DeepSeek + 离线语音识别** 智能体后端的一体化仓库，包含两个子项目：
 
 | 目录 | 说明 | 技术栈 |
 | --- | --- | --- |
-| [`desktop-pet/`](./desktop-pet) | Windows 桌面 3D 桌宠客户端（透明置顶窗口、VRM 模型、VRMA 动作、程序化步态、独立对话窗口与角色联动） | Electron、Vite、Three.js、`@pixiv/three-vrm` |
-| [`agent-backend/`](./agent-backend) | 智能体后端服务（LangGraph 状态图编排、本地 SQLite 记忆持久化、情绪状态延续、工具调用与动作指令下发） | Python 3.11+、FastAPI、LangGraph、`langchain-openai`、`aiosqlite` |
+| [`desktop-pet/`](./desktop-pet) | Windows 桌面 3D 桌宠客户端（透明置顶窗口、VRM 模型、VRMA 动作、右下角实时语音波纹输入、右上角独立透明气泡回复与文字聊天窗口） | Electron、Vite、Three.js、`@pixiv/three-vrm`、Web Audio API |
+| [`agent-backend/`](./agent-backend) | 智能体后端服务（LangGraph 状态图编排、本地 SQLite 记忆持久化、`faster-whisper` 本地离线语音转写、情绪延续与动作下发） | Python 3.11+、FastAPI、LangGraph、`faster-whisper`、`aiosqlite` |
 
-## 快速体验（三步跑通对话 + 持久化记忆 + 动作联动）
+## 快速体验
 
 ### 第一步：填入 DeepSeek 密钥
 
@@ -25,7 +25,8 @@ uv sync
 uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-> 对话记忆与小鲸娘心情会自动持久化到 `agent-backend/data/pet_memory.sqlite`，重启后端也不会丢失历史上下文。
+> - 对话记忆与小鲸娘心情自动持久化到 `agent-backend/data/pet_memory.sqlite`。
+> - 离线语音识别模型权重缓存在 `agent-backend/data/whisper_models`（免费离线可用，无需额外语音密钥）。
 
 ### 第三步：启动 3D 桌宠客户端 (`desktop-pet`)
 
@@ -40,7 +41,10 @@ npm run dev
 npm run electron
 ```
 
-点击桌宠右下角的 **💬 对话按钮** 即可打开吸附在模型旁边的聊天窗口，发送消息时小鲸娘会一边回复一边自动做出对应的挥手、跳跃、跳舞、换表情或移动动作（单次动作播完自动恢复待机）。
+### 交互方式一览
+- **🎙️ 语音对话**：点击桌宠右下角的 `🎙️` 按钮展开实时声波纹胶囊，开口说话后停顿约 `1.3 秒` 自动发送（再次点击 `🎙️` 可立即发送，点 `✕` 取消）。
+- **💭 右上角回答气泡**：小鲸娘回答时会在模型头部右上角（贴靠屏幕右边缘时自动翻到左上角）弹出透明穿透打字机气泡，同时做出表情与单次动作，阅读完毕后自动平滑恢复待机。
+- **💬 文字聊天窗**：点击 `💬` 打开独立聊天记录面板，与语音输入共享同一个会话上下文记忆。
 
 ## 资源署名与许可说明
 

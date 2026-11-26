@@ -120,6 +120,14 @@ export function createCharacterApi({
     return movementBridge.openChatWindow();
   }
 
+  /** 在模型头部右上角（靠屏幕右边缘时自动翻到左上角）显示透明回答气泡。 */
+  function showSpeechBubble(payload) {
+    if (typeof movementBridge?.showSpeechBubble !== "function") {
+      return Promise.resolve({ shown: false });
+    }
+    return movementBridge.showSpeechBubble(payload);
+  }
+
   /** 播放 VRMA 动作，并通知界面和订阅者更新当前动作。 */
   async function playMotion(name, options = {}) {
     const result = await motionController.playMotion(name, options);
@@ -255,6 +263,7 @@ export function createCharacterApi({
     moveToPreset,
     stopMovement,
     openChatWindow,
+    showSpeechBubble,
     applyAgentAction,
     setModelScale,
     getModelScale: () => modelScaleController?.getScale() ?? 1,

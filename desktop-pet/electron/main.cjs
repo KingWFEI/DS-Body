@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen } = require("electron");
+const { app, BrowserWindow, ipcMain, screen, session } = require("electron");
 const path = require("node:path");
 const { createWindowInteraction } = require("./WindowInteraction.cjs");
 
@@ -6,10 +6,15 @@ const MOVEMENT_INTERVAL_MS = 16;
 const WINDOW_MARGIN = 16;
 const SPEED_PRESETS = { slow: 180, normal: 300, fast: 500 };
 const PET_WINDOW_BASE_SIZE = { width: 280, height: 480 };
+const BUBBLE_WINDOW_SIZE = { width: 268, height: 168 };
 
 let petWindow = null;
 let chatWindow = null;
+let bubbleWindow = null;
+let bubbleReadyPromise = null;
+let currentBubbleSide = "right";
 let chatPositionTimer = null;
+let bubblePositionTimer = null;
 let movementTimer = null;
 let activeMovement = null;
 let windowInteraction = null;
@@ -391,15 +396,28 @@ function createWindow() {
   petWindow.webContents.on("did-finish-load", () => {
     publishIdlePosition();
   });
-  petWindow.on("move", scheduleChatWindowPosition);
-  petWindow.on("resize", scheduleChatWindowPosition);
+  petWindow.on("move", () => {
+    scheduleChatWindowPosition();
+    scheduleBubbleWindowPosition();
+  });
+  petWindow.on("resize", () => {
+    scheduleChatWindowPosition();
+    scheduleBubbleWindowPosition();
+  });
   petWindow.on("closed", () => {
     if (movementTimer) clearInterval(movementTimer);
     windowInteraction?.dispose();
     windowInteraction = null;
     if (chatPositionTimer) clearTimeout(chatPositionTimer);
+    if (bubblePositionTimer) clearTimeout(bubblePositionTimer);
+    if (bubbleWindow && !bubbleWindow.isDestroyed()) {
+      bubbleWindow.destroy();
+    }
+    bubbleWindow = null;
+    bubbleReadyPromise = null;
     movementTimer = null;
     chatPositionTimer = null;
+    bubblePositionTimer = null;
     activeMovement = null;
     petWindow = null;
   });
@@ -490,6 +508,128 @@ function openChatWindow() {
   return { opened: true, reused: false };
 }
 
+/**
+ * 计算并更新独立透明回答气泡窗口的位置：
+ * 默认锚定在模型头部右上角；当模型靠近屏幕右边缘空间不足时，自动翻转到左上角并通知气泡翻转尾巴朝向。
+ */
+function positionBubbleWindow() {
+  if (
+    !petWindow ||
+    petWindow.isDestroyed() ||
+    !bubbleWindow ||
+    bubbleWindow.isDestroyed()
+  ) {
+    return currentBubbleSide;
+  }
+
+  const petBounds = petWindow.getBounds();
+  const workArea = screen.getDisplayMatching(petBounds).workArea;
+  const { width: bubbleWidth, height: bubbleHeight } = BUBBLE_WINDOW_SIZE;
+  const rightEdge = workArea.x + workArea.width;
+
+  // 默认贴近模型头部右上侧（适度进入主窗口右上透明留白区，视觉上紧挨角色头部）
+  const rightCandidateX = petBounds.x + Math.round(petBounds.width * 0.72);
+  const leftCandidateX = petBounds.x + Math.round(petBounds.width * 0.28) - bubbleWidth;
+
+  let x;
+  let side;
+  if (rightCandidateX + bubbleWidth <= rightEdge - 8) {
+    x = rightCandidateX;
+    side = "right";
+  } else {
+    x = Math.max(workArea.x + 8, leftCandidateX);
+    side = "left";
+  }
+
+  const preferredY = petBounds.y - 10;
+  const y = clamp(
+    preferredY,
+    workArea.y + 8,
+    workArea.y + workArea.height - bubbleHeight - 8,
+  );
+
+  bubbleWindow.setPosition(Math.round(x), Math.round(y), false);
+  if (side !== currentBubbleSide) {
+    currentBubbleSide = side;
+    if (!bubbleWindow.webContents.isDestroyed()) {
+      bubbleWindow.webContents.send("pet:bubble-side", side);
+    }
+  }
+  return side;
+}
+
+function scheduleBubbleWindowPosition() {
+  if (!bubbleWindow || bubbleWindow.isDestroyed() || !bubbleWindow.isVisible() || bubblePositionTimer) {
+    return;
+  }
+  bubblePositionTimer = setTimeout(() => {
+    bubblePositionTimer = null;
+    positionBubbleWindow();
+  }, 16);
+}
+
+/** 懒创建并复用常驻透明穿透的气泡子窗口，避免每次回答重新加载页面造成延迟。 */
+function ensureBubbleWindow() {
+  if (bubbleWindow && !bubbleWindow.isDestroyed() && bubbleReadyPromise) {
+    return bubbleReadyPromise;
+  }
+
+  bubbleWindow = new BrowserWindow({
+    width: BUBBLE_WINDOW_SIZE.width,
+    height: BUBBLE_WINDOW_SIZE.height,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    resizable: false,
+    focusable: false,
+    skipTaskbar: true,
+    hasShadow: false,
+    show: false,
+    backgroundColor: "#00000000",
+    webPreferences: {
+      preload: path.join(__dirname, "bubble-preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  // 气泡窗口全程鼠标穿透，不抢焦点、不遮挡桌面点击
+  bubbleWindow.setIgnoreMouseEvents(true, { forward: true });
+  bubbleWindow.on("closed", () => {
+    bubbleWindow = null;
+    bubbleReadyPromise = null;
+  });
+
+  bubbleReadyPromise = new Promise((resolve) => {
+    bubbleWindow.webContents.once("did-finish-load", () => resolve(bubbleWindow));
+    void bubbleWindow.loadURL("http://127.0.0.1:5173/bubble.html");
+  });
+  return bubbleReadyPromise;
+}
+
+async function showSpeechBubble(payload) {
+  if (!petWindow || petWindow.isDestroyed() || !payload || typeof payload !== "object") {
+    return { shown: false };
+  }
+  const win = await ensureBubbleWindow();
+  if (!win || win.isDestroyed() || !petWindow || petWindow.isDestroyed()) {
+    return { shown: false };
+  }
+
+  const side = positionBubbleWindow();
+  // showInactive 展示气泡但不夺取用户当前输入焦点
+  win.showInactive();
+  win.webContents.send("pet:bubble-update", { ...payload, side });
+  return { shown: true, side };
+}
+
+function isTrustedSender(event) {
+  const isFromChat = chatWindow && !chatWindow.isDestroyed() && event.sender === chatWindow.webContents;
+  const isFromPet = petWindow && !petWindow.isDestroyed() && event.sender === petWindow.webContents;
+  return Boolean(isFromChat || isFromPet);
+}
+
 function assertOwner(event) {
   if (!petWindow || event.sender !== petWindow.webContents) {
     throw new Error("无权控制桌宠窗口");
@@ -497,6 +637,14 @@ function assertOwner(event) {
 }
 
 app.whenReady().then(() => {
+  // 允许本地开发源访问麦克风，供右下角语音输入与声波纹采集音频使用
+  session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {
+    return permission === "media";
+  });
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(permission === "media");
+  });
+
   ipcMain.handle("pet:move-to-screen", (event, x, y, options) => {
     assertOwner(event);
     return moveToScreen(x, y, options);
@@ -513,11 +661,26 @@ app.whenReady().then(() => {
     assertOwner(event);
     return openChatWindow();
   });
+  ipcMain.handle("pet:show-speech-bubble", (event, payload) => {
+    if (!isTrustedSender(event)) {
+      throw new Error("无权显示桌宠回答气泡");
+    }
+    return showSpeechBubble(payload);
+  });
+  ipcMain.on("pet:hide-speech-bubble", (event) => {
+    if (bubbleWindow && !bubbleWindow.isDestroyed() && event.sender === bubbleWindow.webContents) {
+      bubbleWindow.hide();
+    }
+  });
+  ipcMain.on("pet:sync-chat-entry", (event, entry) => {
+    if (!petWindow || event.sender !== petWindow.webContents) return;
+    if (chatWindow && !chatWindow.isDestroyed() && !chatWindow.webContents.isDestroyed()) {
+      chatWindow.webContents.send("pet:chat-sync", entry);
+    }
+  });
   // 接收来自对话窗口（或主窗口）的智能体动作指令，并转发给 3D 桌宠渲染进程执行。
   ipcMain.handle("pet:dispatch-agent-action", (event, action) => {
-    const isFromChat = chatWindow && !chatWindow.isDestroyed() && event.sender === chatWindow.webContents;
-    const isFromPet = petWindow && !petWindow.isDestroyed() && event.sender === petWindow.webContents;
-    if (!isFromChat && !isFromPet) {
+    if (!isTrustedSender(event)) {
       throw new Error("无权向桌宠发送智能体动作指令");
     }
     if (

@@ -1,18 +1,22 @@
 """LangGraph 状态图、工具调用与本地 SQLite 记忆持久化单元测试。"""
 
+import io
 from pathlib import Path
 from typing import Any
+import wave
 
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, ToolMessage
+import numpy as np
 import pytest
 
 from app.config import API_KEY_PLACEHOLDER, Settings
 from app.graph.tools import SUBMIT_REPLY_TOOL_NAME
 from app.graph.workflow import prepare_llm_messages
-from app.main import app
-from app.schemas import ChatRequest
+from app.main import app, asr_service, agent_service
+from app.schemas import ChatRequest, ChatResponse, PetAction
 from app.services.agent_service import AgentService
+from app.services.asr_service import ASRService
 
 
 class ScriptedFakeLLM:
@@ -176,3 +180,70 @@ def test_prepare_llm_messages_heals_dangling_tool_calls() -> None:
     tool_msgs = [m for m in healed if isinstance(m, ToolMessage)]
     assert len(tool_msgs) == 1
     assert tool_msgs[0].tool_call_id == "dangling_1"
+
+
+def _make_16k_wav_bytes(duration_sec: float = 0.5) -> bytes:
+    """生成一段标准 16kHz 16-bit 单声道测试 WAV 字节流。"""
+    sample_count = int(16000 * duration_sec)
+    samples = (np.sin(np.linspace(0, 20 * np.pi, sample_count)) * 12000).astype(np.int16)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(samples.tobytes())
+    return buf.getvalue()
+
+
+def test_asr_wav_fast_decoder_and_voice_chat_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """验证 16kHz WAV 快速解码器及 /api/v1/voice/chat 的静音兜底与识别对话链路。"""
+    wav_bytes = _make_16k_wav_bytes(0.4)
+    decoded = ASRService._try_decode_16k_pcm_wav(wav_bytes)
+    assert decoded is not None
+    assert decoded.shape == (6400,)
+    assert decoded.dtype == np.float32
+
+    # 1. 当未识别到有效说话内容时，不消耗大模型调用并给出温柔提示
+    async def fake_transcribe_empty(_data: bytes) -> str:
+        return ""
+
+    monkeypatch.setattr(asr_service, "transcribe", fake_transcribe_empty)
+    with TestClient(app) as client:
+        empty_res = client.post(
+            "/api/v1/voice/chat",
+            files={"audio": ("voice.wav", wav_bytes, "audio/wav")},
+            data={"session_id": "voice-s1"},
+        )
+        assert empty_res.status_code == 200
+        assert empty_res.json()["recognized_text"] == ""
+        assert "没听清" in empty_res.json()["reply"]
+
+    # 2. 当识别出中文句子时，应转交智能体服务并返回转写文本、回复及动作
+    async def fake_transcribe_hello(_data: bytes) -> str:
+        return "你好小鲸娘"
+
+    async def fake_agent_chat(req: ChatRequest) -> ChatResponse:
+        assert req.message == "你好小鲸娘"
+        assert req.session_id == "voice-s1"
+        return ChatResponse(
+            session_id=req.session_id,
+            reply="听见你叫我啦！",
+            action=PetAction(motion="attention/wave hand 1", expression="happy"),
+            using_mock=False,
+        )
+
+    monkeypatch.setattr(asr_service, "transcribe", fake_transcribe_hello)
+    monkeypatch.setattr(agent_service, "chat", fake_agent_chat)
+
+    with TestClient(app) as client:
+        ok_res = client.post(
+            "/api/v1/voice/chat",
+            files={"audio": ("voice.wav", wav_bytes, "audio/wav")},
+            data={"session_id": "voice-s1"},
+        )
+        assert ok_res.status_code == 200
+        body = ok_res.json()
+        assert body["recognized_text"] == "你好小鲸娘"
+        assert body["reply"] == "听见你叫我啦！"
+        assert body["action"]["motion"] == "attention/wave hand 1"
+

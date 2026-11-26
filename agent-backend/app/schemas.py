@@ -80,7 +80,7 @@ class ChatResponse(BaseModel):
     """后端智能体返回给桌宠客户端的对话结果。"""
 
     session_id: str = Field(description="当前会话 ID")
-    reply: str = Field(description="小鲸娘展示在对话框中的文字回复")
+    reply: str = Field(description="小鲸娘展示在对话框或右上角气泡中的文字回复")
     action: PetAction | None = Field(
         default=None,
         description="需要前端桌宠同步执行的动作、表情或移动指令",
@@ -88,6 +88,15 @@ class ChatResponse(BaseModel):
     using_mock: bool = Field(
         default=False,
         description="是否为未配置 DeepSeek 密钥时的本地演示回复",
+    )
+
+
+class VoiceChatResponse(ChatResponse):
+    """语音对话接口响应：在标准对话响应基础上附带离线 ASR 识别出的用户原话。"""
+
+    recognized_text: str = Field(
+        default="",
+        description="faster-whisper 将用户录音转写出的中文文本；未识别到有效人声时为空字符串",
     )
 
 
@@ -111,4 +120,5 @@ class HealthResponse(BaseModel):
     service: str = Field(description="服务名称")
     engine: str = Field(default="langgraph+sqlite", description="智能体编排与记忆存储引擎")
     model: str = Field(description="当前配置的 DeepSeek 模型名称")
+    asr_model: str = Field(default="faster-whisper", description="本地离线语音识别模型规格")
     api_key_configured: bool = Field(description="是否已配置有效的 DeepSeek API 密钥")

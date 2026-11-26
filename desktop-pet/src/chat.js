@@ -7,12 +7,13 @@
  * 3. 收到后端回复后，通过 Electron 预加载桥（或浏览器 BroadcastChannel 降级通道）驱动 3D 桌宠同步执行动作、表情和屏幕移动。
  */
 
+import { getSharedSessionId } from "./utils/wavEncoder.js";
+
 // 后端智能体服务地址（可通过环境变量 VITE_AGENT_API_BASE 覆盖，默认本地 8000 端口）
 const API_BASE_URL = (import.meta.env.VITE_AGENT_API_BASE || "http://127.0.0.1:8000").replace(/\/+$/, "");
 
-// 当前窗口使用的会话 ID（持久化在 sessionStorage 中，刷新页面保持同一轮会话）
-const SESSION_STORAGE_KEY = "ds-body:chat-session-id";
-const sessionId = getOrCreateSessionId();
+// 与主窗口语音输入共享同一个持久化会话 ID，保证语音聊天和打字聊天上下文无缝互通
+const sessionId = getSharedSessionId();
 
 // 浏览器多标签页预览模式下的降级广播通道（Electron 环境下优先走 __chatWindowBridge IPC）
 const fallbackChannel =
@@ -28,19 +29,6 @@ const sendBtn = document.querySelector("#sendBtn");
 const clearBtn = document.querySelector("#clearBtn");
 
 let isSending = false;
-
-/** 获取或生成当前窗口的唯一会话 ID。 */
-function getOrCreateSessionId() {
-  try {
-    const cached = sessionStorage.getItem(SESSION_STORAGE_KEY);
-    if (cached) return cached;
-    const created = `pet-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-    sessionStorage.setItem(SESSION_STORAGE_KEY, created);
-    return created;
-  } catch {
-    return "default";
-  }
-}
 
 /** 更新顶部连接状态指示器样式与文案。 */
 function updateStatusBadge(mode, text) {
@@ -187,7 +175,11 @@ async function handleSendMessage(event) {
       updateStatusBadge("online", "已连接 DeepSeek");
     }
 
-    // 驱动 3D 桌宠同步做出动作、表情或移动
+    // 同步在模型右上角弹出回答气泡，并驱动 3D 桌宠做出动作、表情或移动
+    void globalThis.__chatWindowBridge?.showSpeechBubble?.({
+      text: data.reply || "收到啦～",
+      mode: "reply",
+    });
     if (data.action) {
       await forwardPetAction(data.action);
     }
@@ -233,6 +225,21 @@ function initChatWindow() {
 
   chatForm.addEventListener("submit", handleSendMessage);
   clearBtn.addEventListener("click", handleClearChat);
+
+  // 当主窗口使用右下角麦克风进行语音对话时，实时同步展示到当前聊天记录面板
+  globalThis.__chatWindowBridge?.onVoiceChatSynced?.((entry) => {
+    if (!entry) return;
+    if (entry.userText) {
+      appendChatMessage({ role: "user", text: `🎙️ ${entry.userText}` });
+    }
+    if (entry.reply) {
+      appendChatMessage({ role: "pet", text: entry.reply, action: entry.action });
+    }
+    updateStatusBadge(
+      entry.usingMock ? "demo" : "online",
+      entry.usingMock ? "演示模式 · 待在 .env 填入 DeepSeek 密钥" : "已连接 DeepSeek",
+    );
+  });
 
   void checkBackendHealth();
   messageInput.focus();

@@ -10,7 +10,7 @@
 from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# 定位 agent-backend 目录，确保从任意工作目录启动都能正确定位 .env 和本地 SQLite 数据库
+# 定位 agent-backend 目录，确保从任意工作目录启动都能正确定位 .env、SQLite 与本地语音模型目录
 BASE_DIR = Path(__file__).resolve().parent.parent
 ENV_FILE_PATH = BASE_DIR / ".env"
 
@@ -22,11 +22,11 @@ FALLBACK_DEEPSEEK_API_KEY = "sk-请在这里填入你的DeepSeek密钥"
 
 
 class Settings(BaseSettings):
-    """应用运行参数、DeepSeek 模型参数与本地 SQLite 记忆库配置。"""
+    """应用运行参数、DeepSeek 模型参数、本地 SQLite 记忆库与离线语音识别配置。"""
 
     # 服务基础信息
     app_name: str = "DS-Body Agent Backend"
-    app_version: str = "0.3.0"
+    app_version: str = "0.4.0"
     app_host: str = "127.0.0.1"
     app_port: int = 8000
     cors_origins: str = "http://127.0.0.1:5173,http://localhost:5173"
@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     # 会话上下文裁剪与本地 SQLite 持久化路径
     max_history_rounds: int = 10
     sqlite_db_path: str = "data/pet_memory.sqlite"
+
+    # 本地离线语音识别（faster-whisper）配置
+    whisper_model_size: str = "base"
+    whisper_device: str = "cpu"
+    whisper_compute_type: str = "int8"
+    whisper_download_dir: str = "data/whisper_models"
+    hf_endpoint: str = "https://hf-mirror.com"
 
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE_PATH),
@@ -81,11 +88,7 @@ class Settings(BaseSettings):
 
     @property
     def resolved_sqlite_path(self) -> str:
-        """
-        解析本地 SQLite 数据库连接路径：
-        - `:memory:` 原样返回（供单元测试使用内存库）；
-        - 相对路径自动相对于 `agent-backend/` 目录解析，并确保父目录存在。
-        """
+        """解析本地 SQLite 数据库连接路径并确保父目录存在。"""
         raw = self.sqlite_db_path.strip()
         if raw == ":memory:":
             return ":memory:"
@@ -93,6 +96,15 @@ class Settings(BaseSettings):
         if not path.is_absolute():
             path = (BASE_DIR / path).resolve()
         path.parent.mkdir(parents=True, exist_ok=True)
+        return str(path)
+
+    @property
+    def resolved_whisper_dir(self) -> str:
+        """解析本地 faster-whisper 模型缓存目录并自动创建文件夹。"""
+        path = Path(self.whisper_download_dir.strip())
+        if not path.is_absolute():
+            path = (BASE_DIR / path).resolve()
+        path.mkdir(parents=True, exist_ok=True)
         return str(path)
 
 

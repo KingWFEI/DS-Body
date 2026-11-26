@@ -1,0 +1,107 @@
+:root {
+  font-family: Inter, 'Microsoft YaHei', sans-serif;
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  pointer-events: none;
+}
+
+.bubble-stage {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  width: 100%;
+  height: 100%;
+  padding: 10px 14px 18px;
+}
+
+.bubble-stage.side-right {
+  align-items: flex-start;
+}
+
+.bubble-stage.side-left {
+  align-items: flex-end;
+}
+
+.speech-bubble {
+  position: relative;
+  max-width: 236px;
+  min-width: 84px;
+  padding: 10px 13px;
+  border: 1.5px solid rgba(255, 255, 255, 0.92);
+  border-radius: 16px;
+  background: linear-gradient(155deg, rgba(255, 255, 255, 0.96), rgba(235, 247, 255, 0.94));
+  color: #17304c;
+  box-shadow: 0 8px 22px rgba(17, 43, 74, 0.18);
+  opacity: 0;
+  transform: translateY(8px) scale(0.95);
+  transition: opacity 0.22s ease, transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.speech-bubble.visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.speech-bubble.hiding {
+  opacity: 0;
+  transform: translateY(-6px) scale(0.96);
+}
+
+/* 气泡小尾巴：在模型右侧时指向左下角头部；翻转到模型左侧时指向右下角头部 */
+.speech-bubble::after {
+  content: "";
+  position: absolute;
+  bottom: -7px;
+  width: 13px;
+  height: 13px;
+  background: rgba(238, 248, 255, 0.96);
+  border-right: 1.5px solid rgba(255, 255, 255, 0.92);
+  border-bottom: 1.5px solid rgba(255, 255, 255, 0.92);
+  transform: rotate(45deg);
+}
+
+.side-right .speech-bubble::after {
+  left: 18px;
+}
+
+.side-left .speech-bubble::after {
+  right: 18px;
+}
+
+.heard-line {
+  margin-bottom: 5px;
+  padding-bottom: 4px;
+  border-bottom: 1px dashed rgba(94, 146, 194, 0.28);
+  color: #567799;
+  font-size: 10.5px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.reply-text {
+  max-height: 98px;
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.speech-bubble.thinking .reply-text {
+  color: #527396;
+  font-style: italic;
+}
