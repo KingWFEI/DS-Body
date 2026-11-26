@@ -19,6 +19,7 @@ export default defineConfig({
         index: resolve(projectRoot, 'index.html'),
         bubble: resolve(projectRoot, 'bubble.html'),
         history: resolve(projectRoot, 'history.html'),
+        dock: resolve(projectRoot, 'dock.html'),
       },
     },
   },

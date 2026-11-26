@@ -15,6 +15,9 @@ contextBridge.exposeInMainWorld("__desktopPetBridge", {
   getAlwaysOnTop: () => ipcRenderer.invoke("pet:get-always-on-top"),
   // 打开独立的历史聊天记录查看窗口（读取后端 SQLite 持久化记录）。
   openHistoryWindow: () => ipcRenderer.invoke("pet:open-history-window"),
+  // 手动贴边折叠或从侧边折叠状态恢复桌宠。
+  dockToEdge: (side) => ipcRenderer.invoke("pet:dock-to-edge", side),
+  restoreFromDock: () => ipcRenderer.invoke("pet:restore-from-dock"),
   // 请求主进程在模型右上角（靠右边缘时自动翻到左上角）显示透明回答气泡。
   showSpeechBubble: (payload) => ipcRenderer.invoke("pet:show-speech-bubble", payload),
   // 仅在布局变化时上报模型与控件矩形；主进程独立处理穿透。
@@ -34,5 +37,19 @@ contextBridge.exposeInMainWorld("__desktopPetBridge", {
     const listener = (_event, action) => callback(action);
     ipcRenderer.on("pet:agent-action", listener);
     return () => ipcRenderer.removeListener("pet:agent-action", listener);
+  },
+  // 订阅拖拽靠近屏幕边缘过半时的折叠吸附预览状态（"left" | "right" | null）。
+  onDockPreviewChanged: (callback) => {
+    if (typeof callback !== "function") return () => {};
+    const listener = (_event, side) => callback(side);
+    ipcRenderer.on("pet:dock-preview", listener);
+    return () => ipcRenderer.removeListener("pet:dock-preview", listener);
+  },
+  // 订阅桌宠进入/退出侧边折叠状态，以便折叠隐藏期间暂停 WebGL 渲染节省显卡资源。
+  onDockedChanged: (callback) => {
+    if (typeof callback !== "function") return () => {};
+    const listener = (_event, docked) => callback(Boolean(docked));
+    ipcRenderer.on("pet:docked-changed", listener);
+    return () => ipcRenderer.removeListener("pet:docked-changed", listener);
   },
 });

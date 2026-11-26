@@ -231,8 +231,16 @@ export function createDebugPanel() {
     });
 
     const unsubscribeScale = character.onModelScaleChanged(updateScale);
+    const unsubscribeDockPreview = globalThis.__desktopPetBridge?.onDockPreviewChanged?.((side) => {
+      app.classList.toggle("dock-preview", Boolean(side));
+      if (side) {
+        setSettingsOpen(false);
+        quickTextController.hide();
+      }
+    });
     return () => {
       unsubscribeScale();
+      unsubscribeDockPreview?.();
       quickTextController.dispose();
       voiceController.dispose();
       interaction.dispose();

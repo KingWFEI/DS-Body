@@ -138,6 +138,22 @@ export function createCharacterApi({
     return movementBridge.openHistoryWindow();
   }
 
+  /** 手动将桌宠折叠收起到屏幕左侧或右侧悬浮按钮。 */
+  function dockToEdge(side = "right") {
+    if (typeof movementBridge?.dockToEdge !== "function") {
+      return Promise.resolve({ docked: false });
+    }
+    return movementBridge.dockToEdge(side);
+  }
+
+  /** 从屏幕侧边悬浮按钮状态恢复桌宠主窗口。 */
+  function restoreFromDock() {
+    if (typeof movementBridge?.restoreFromDock !== "function") {
+      return Promise.resolve({ restored: false });
+    }
+    return movementBridge.restoreFromDock();
+  }
+
   /** 在模型头部右上角（靠屏幕右边缘时自动翻到左上角）显示透明回答气泡。 */
   function showSpeechBubble(payload) {
     if (typeof movementBridge?.showSpeechBubble !== "function") {
@@ -283,6 +299,8 @@ export function createCharacterApi({
     setAlwaysOnTop,
     getAlwaysOnTop,
     openHistoryWindow,
+    dockToEdge,
+    restoreFromDock,
     showSpeechBubble,
     applyAgentAction,
     setModelScale,

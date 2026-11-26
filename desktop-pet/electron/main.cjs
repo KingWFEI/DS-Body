@@ -1,12 +1,18 @@
 const { app, BrowserWindow, ipcMain, screen, session } = require("electron");
 const path = require("node:path");
 const { createWindowInteraction } = require("./WindowInteraction.cjs");
+const {
+  computeDockButtonBounds,
+  computeRestoredPetPosition,
+  detectEdgeDockSide,
+} = require("./edgeDocking.cjs");
 
 const MOVEMENT_INTERVAL_MS = 16;
 const WINDOW_MARGIN = 16;
 const SPEED_PRESETS = { slow: 180, normal: 300, fast: 500 };
 const PET_WINDOW_BASE_SIZE = { width: 280, height: 480 };
 const BUBBLE_WINDOW_SIZE = { width: 268, height: 168 };
+const DOCK_WINDOW_SIZE = { width: 58, height: 68 };
 
 // 在双显卡（核显 + 独显）机器上强制使用高性能独显合成透明 WebGL 窗口，消除跨显卡复制导致的掉帧与拖影。
 app.commandLine.appendSwitch("force_high_performance_gpu");
@@ -14,6 +20,10 @@ app.commandLine.appendSwitch("force_high_performance_gpu");
 let petWindow = null;
 let historyWindow = null;
 let bubbleWindow = null;
+let dockWindow = null;
+let dockReadyPromise = null;
+let dockedState = null; // { side: "left" | "right", displayId: number } | null
+let lastDockPreviewSide = null;
 let bubbleReadyPromise = null;
 let currentBubbleSide = "right";
 let bubblePositionTimer = null;
@@ -119,6 +129,9 @@ function finishMovement(status) {
 
   const position = getPosition();
   publishMovement(movementTelemetry(movement, status, position, { x: 0, y: 0 }));
+  if (status === "arrived") {
+    void checkAndEnterEdgeDock();
+  }
   return { stopped: true, status, requestId: movement.requestId, position };
 }
 
@@ -199,15 +212,32 @@ function startMovement(x, y, options = {}) {
     throw new Error(`未知运动模式：${requestedMode}`);
 
   stopMovement();
+  if (dockedState) {
+    awaitRestoreFromDockSync();
+  }
   const bounds = petWindow.getBounds();
   const windowSize = { width: bounds.width, height: bounds.height };
   const startPosition = { x: bounds.x, y: bounds.y };
-  const display = screen.getDisplayNearestPoint({
+  const requestedEdgeDock = detectEdgeDockSide(
+    { x, y, width: windowSize.width, height: windowSize.height },
+    screen.getAllDisplays(),
+  );
+  const display = requestedEdgeDock?.display ?? screen.getDisplayNearestPoint({
     x: x + windowSize.width / 2,
     y: y + windowSize.height / 2,
   });
   const workArea = display.workArea;
-  const targetPosition = clampToWorkArea({ x, y }, windowSize, workArea);
+  // 若外部显式传入超出屏幕左右边缘过半的目标坐标，允许走到半出界处并在到达后自动折叠为侧边按钮
+  const targetPosition = requestedEdgeDock
+    ? {
+        x: Math.round(
+          requestedEdgeDock.side === "left"
+            ? display.bounds.x - Math.ceil(windowSize.width / 2) - 4
+            : display.bounds.x + display.bounds.width - Math.floor(windowSize.width / 2) + 4,
+        ),
+        y: clampToWorkArea({ x: workArea.x + WINDOW_MARGIN, y }, windowSize, workArea).y,
+      }
+    : clampToWorkArea({ x, y }, windowSize, workArea);
   const workAreas = getWorkAreas();
   const requestId = nextRequestId++;
   const distance = Math.hypot(
@@ -410,7 +440,11 @@ function createWindow() {
   windowInteraction = createWindowInteraction(petWindow);
   petWindow.on("will-move", stopMovement);
   petWindow.on("moved", () => {
-    if (!activeMovement) publishIdlePosition();
+    if (activeMovement) return;
+    setDockPreview(null);
+    void checkAndEnterEdgeDock().then((docked) => {
+      if (!docked) publishIdlePosition();
+    });
   });
 
   petWindow.loadURL("http://127.0.0.1:5173");
@@ -421,7 +455,9 @@ function createWindow() {
     publishIdlePosition();
   });
   petWindow.on("move", () => {
-    if (activeMovement) return;
+    if (activeMovement || dockedState) return;
+    const hit = detectEdgeDockSide(petWindow.getBounds(), screen.getAllDisplays());
+    setDockPreview(hit?.side ?? null);
     scheduleBubbleWindowPosition();
   });
   petWindow.on("resize", () => {
@@ -438,9 +474,15 @@ function createWindow() {
     if (historyWindow && !historyWindow.isDestroyed()) {
       historyWindow.destroy();
     }
+    if (dockWindow && !dockWindow.isDestroyed()) {
+      dockWindow.destroy();
+    }
     bubbleWindow = null;
     historyWindow = null;
+    dockWindow = null;
     bubbleReadyPromise = null;
+    dockReadyPromise = null;
+    dockedState = null;
     movementTimer = null;
     bubblePositionTimer = null;
     activeMovement = null;
@@ -617,6 +659,137 @@ function openHistoryWindow() {
   return { opened: true, reused: false };
 }
 
+/** 更新主窗口拖拽过半时的吸附视觉提示。 */
+function setDockPreview(side) {
+  const next = side === "left" || side === "right" ? side : null;
+  if (next === lastDockPreviewSide) return;
+  lastDockPreviewSide = next;
+  if (petWindow && !petWindow.isDestroyed() && !petWindow.webContents.isDestroyed()) {
+    petWindow.webContents.send("pet:dock-preview", next);
+  }
+}
+
+/** 懒创建并常驻复用侧边悬浮按钮窗口。 */
+function ensureDockWindow() {
+  if (dockWindow && !dockWindow.isDestroyed() && dockReadyPromise) {
+    return dockReadyPromise;
+  }
+
+  dockWindow = new BrowserWindow({
+    width: DOCK_WINDOW_SIZE.width,
+    height: DOCK_WINDOW_SIZE.height,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: petWindow ? petWindow.isAlwaysOnTop() : true,
+    resizable: false,
+    skipTaskbar: true,
+    hasShadow: false,
+    show: false,
+    backgroundColor: "#00000000",
+    webPreferences: {
+      preload: path.join(__dirname, "dock-preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  dockWindow.on("closed", () => {
+    dockWindow = null;
+    dockReadyPromise = null;
+  });
+
+  dockReadyPromise = new Promise((resolve) => {
+    dockWindow.webContents.once("did-finish-load", () => resolve(dockWindow));
+    void dockWindow.loadURL("http://127.0.0.1:5173/dock.html");
+  });
+  return dockReadyPromise;
+}
+
+/** 将桌宠折叠到指定的屏幕左/右侧边小按钮。 */
+async function enterEdgeDock(side, display) {
+  if (!petWindow || petWindow.isDestroyed()) return false;
+  const normalizedSide = side === "left" ? "left" : "right";
+  const petBounds = petWindow.getBounds();
+  const targetDisplay = display ?? screen.getDisplayMatching(petBounds);
+
+  stopMovement();
+  setDockPreview(null);
+
+  const win = await ensureDockWindow();
+  if (!win || win.isDestroyed() || !petWindow || petWindow.isDestroyed()) return false;
+
+  const dockBounds = computeDockButtonBounds({
+    side: normalizedSide,
+    display: targetDisplay,
+    petBounds,
+    dockSize: DOCK_WINDOW_SIZE,
+  });
+
+  dockedState = {
+    side: normalizedSide,
+    displayId: targetDisplay.id,
+  };
+
+  if (bubbleWindow && !bubbleWindow.isDestroyed()) {
+    bubbleWindow.hide();
+  }
+  win.setAlwaysOnTop(petWindow.isAlwaysOnTop());
+  win.setBounds(dockBounds, false);
+  win.webContents.send("pet:dock-side", normalizedSide);
+  win.showInactive();
+
+  petWindow.hide();
+  if (!petWindow.webContents.isDestroyed()) {
+    petWindow.webContents.send("pet:docked-changed", true);
+  }
+  return true;
+}
+
+/** 检查当前桌宠窗口是否超出左右屏幕边缘过半，若是则立即折叠为侧边浮窗按钮。 */
+async function checkAndEnterEdgeDock() {
+  if (!petWindow || petWindow.isDestroyed() || dockedState) return false;
+  const hit = detectEdgeDockSide(petWindow.getBounds(), screen.getAllDisplays());
+  if (!hit) return false;
+  return enterEdgeDock(hit.side, hit.display);
+}
+
+/** 同步唤醒（供内部在折叠状态下发起新移动时立即恢复窗口）。 */
+function awaitRestoreFromDockSync() {
+  if (!petWindow || petWindow.isDestroyed() || !dockedState) {
+    return { restored: false };
+  }
+
+  const { side, displayId } = dockedState;
+  const displays = screen.getAllDisplays();
+  const targetDisplay =
+    displays.find((d) => d.id === displayId) ?? screen.getPrimaryDisplay();
+  const petBounds = petWindow.getBounds();
+  const dockBounds =
+    dockWindow && !dockWindow.isDestroyed() ? dockWindow.getBounds() : null;
+
+  const restoredPos = computeRestoredPetPosition({
+    side,
+    display: targetDisplay,
+    petSize: { width: petBounds.width, height: petBounds.height },
+    dockBounds,
+    margin: WINDOW_MARGIN,
+  });
+
+  dockedState = null;
+  if (dockWindow && !dockWindow.isDestroyed()) {
+    dockWindow.hide();
+  }
+
+  petWindow.setPosition(restoredPos.x, restoredPos.y, false);
+  petWindow.show();
+  if (!petWindow.webContents.isDestroyed()) {
+    petWindow.webContents.send("pet:docked-changed", false);
+  }
+  publishIdlePosition();
+  return { restored: true, side, position: restoredPos };
+}
+
 function isTrustedSender(event) {
   return Boolean(petWindow && !petWindow.isDestroyed() && event.sender === petWindow.webContents);
 }
@@ -660,12 +833,31 @@ app.whenReady().then(() => {
     if (bubbleWindow && !bubbleWindow.isDestroyed()) {
       bubbleWindow.setAlwaysOnTop(nextFlag);
     }
+    if (dockWindow && !dockWindow.isDestroyed()) {
+      dockWindow.setAlwaysOnTop(nextFlag);
+    }
     return { alwaysOnTop: petWindow.isAlwaysOnTop() };
   });
   ipcMain.handle("pet:get-always-on-top", (event) => {
     assertOwner(event);
     if (!petWindow || petWindow.isDestroyed()) return { alwaysOnTop: true };
     return { alwaysOnTop: petWindow.isAlwaysOnTop() };
+  });
+  ipcMain.handle("pet:dock-to-edge", async (event, side) => {
+    assertOwner(event);
+    if (!petWindow || petWindow.isDestroyed()) return { docked: false };
+    const normalized = side === "left" ? "left" : "right";
+    const display = screen.getDisplayMatching(petWindow.getBounds());
+    const docked = await enterEdgeDock(normalized, display);
+    return { docked, side: normalized };
+  });
+  ipcMain.handle("pet:restore-from-dock", (event) => {
+    const isFromDock = dockWindow && !dockWindow.isDestroyed() && event.sender === dockWindow.webContents;
+    const isFromPet = petWindow && !petWindow.isDestroyed() && event.sender === petWindow.webContents;
+    if (!isFromDock && !isFromPet) {
+      throw new Error("无权恢复桌宠窗口");
+    }
+    return awaitRestoreFromDockSync();
   });
   ipcMain.handle("pet:open-history-window", (event) => {
     assertOwner(event);

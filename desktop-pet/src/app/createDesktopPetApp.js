@@ -41,6 +41,7 @@ export function createDesktopPetApp() {
   let previousLocomotionMode = "idle";
   let animationFrame = null;
   let started = false;
+  let paused = false;
   let disposed = false;
   const clock = new THREE.Clock();
 
@@ -123,7 +124,10 @@ export function createDesktopPetApp() {
   }
 
   function updateFrame() {
-    if (disposed) return;
+    if (disposed || paused) {
+      animationFrame = null;
+      return;
+    }
     animationFrame = requestAnimationFrame(updateFrame);
 
     // 按当前显示器原生 VSync（如 144Hz / 280Hz）同步推进窗口位移，消除 60Hz 定时器跨帧跳变重影。
@@ -162,6 +166,24 @@ export function createDesktopPetApp() {
     characterScene.renderer.render(characterScene.scene, characterScene.camera);
   }
 
+  // 折叠收起到屏幕侧边按钮时暂停 3D 渲染以零占用省电；点击恢复出现时重启动画并挥手问好。
+  const unsubscribeDocked = globalThis.__desktopPetBridge?.onDockedChanged?.((docked) => {
+    paused = Boolean(docked);
+    if (!paused && started && !disposed) {
+      clock.getDelta();
+      if (animationFrame === null) {
+        updateFrame();
+      }
+      if (vrm && mixer) {
+        void characterApi.applyAgentAction({
+          motion: "attention/wave hand 1",
+          expression: "happy",
+          expression_weight: 0.9,
+        });
+      }
+    }
+  });
+
   function start() {
     if (started || disposed) return;
     started = true;
@@ -173,6 +195,7 @@ export function createDesktopPetApp() {
     if (disposed) return;
     disposed = true;
     if (animationFrame !== null) cancelAnimationFrame(animationFrame);
+    unsubscribeDocked?.();
     unbindDebugPanel();
     characterScene.dispose();
     if (window.character === characterApi) delete window.character;
